@@ -200,6 +200,8 @@ activeAttacks: { one: "# aktiver Angriff", other: "# aktive Angriffe" },
       "ho.empty.title": "Noch keine überwachten Hosts",
       "ho.empty.sub": "Top-Talker füllen sich aus Flussstichproben. Bei einer Neuinstallation geschieht dies innerhalb weniger Abfragezyklen.",
       "ho.headline": "Sortiert nach Durchsatz (Mbit/s)",
+	  "ho.top10": "Top-10-Hosts",
+	  "ho.notraffic": "Kein Verkehr in dieser Richtung.",
 
       "hg.policy": "Richtlinie",
       "hg.calc": "Berechnungsmodus",

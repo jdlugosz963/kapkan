@@ -47,13 +47,29 @@
     var markerFrac = null;
     var idx = b.inAttack.indexOf(true);
     if (idx >= 0 && ctx.posture !== "calm") markerFrac = idx / Math.max(1, b.inAttack.length - 1);
-    function card(labelKey, dirColor, vals, now, color) {
+  function upstreamBars(list, total, color) {
+    if (!list || !list.length) return null;
+    return h("div", { class: "upstream-bars" }, list.slice(0, 16).map(function (upstream) {
+    var fraction = total > 0 ? upstream.mbps / total : 0;
+	var value = Math.max(2, Math.min(100, fraction * 100));
+    return h("div", { class: "upstream-bar" }, [
+      h("span", { class: "upstream-bar__key", text: upstream.key }),
+      h("span", { class: "upstream-bar__rate", text: I.mbps(upstream.mbps) }),
+      h("span", { class: "upstream-bar__pct", text: I.pct(fraction) }),
+	  h("progress", { class: "upstream-bar__track " + (color === "var(--chart-out)" ? "is-egress" : "is-ingress"), attrs: {
+		max: "100", value: String(value), "aria-label": upstream.key + " " + I.pct(fraction)
+	  } })
+    ]);
+    }));
+  }
+  function card(labelKey, dirColor, vals, now, color, upstreams, total) {
       return h("div", { class: "tcard" }, [
         h("div", { class: "tcard__head" }, [
           h("div", { class: "tcard__label" }, [(function () { var d = h("span", { class: "tcard__dir" }); d.style.background = dirColor; return d; })(), h("span", { text: I.t(labelKey) })]),
           h("div", { class: "tcard__now" }, [now, " ", h("small", { text: I.t("ov.now") })])
         ]),
-        h("div", { class: "tcard__chart" }, K.areaChart(vals.length ? vals : [0, 0], { color: color, markerFrac: markerFrac }))
+		h("div", { class: "tcard__chart" }, K.areaChart(vals.length ? vals : [0, 0], { color: color, markerFrac: markerFrac })),
+		upstreamBars(upstreams, total, color)
       ]);
     }
     return h("div", { class: "card" }, [
@@ -62,8 +78,8 @@
         markerFrac != null ? K.badge("badge--active", I.t("ov.attackwindow"), "alert") : null
       ]),
       h("div", { class: "card__body" }, h("div", { class: "traffic-strip" }, [
-        card("ov.ingress", "var(--chart-in)", ctx.buf.aggIn, I.mbps(agg.in_mbps), "var(--chart-in)"),
-        card("ov.egress", "var(--chart-out)", ctx.buf.aggOut, I.mbps(agg.out_mbps), "var(--chart-out)")
+		card("ov.ingress", "var(--chart-in)", ctx.buf.aggIn, I.mbps(agg.in_mbps), "var(--chart-in)", agg.in_upstreams, agg.in_mbps),
+		card("ov.egress", "var(--chart-out)", ctx.buf.aggOut, I.mbps(agg.out_mbps), "var(--chart-out)", agg.out_upstreams, agg.out_mbps)
       ]))
     ]);
   }
@@ -229,6 +245,7 @@
     children.push(dryRunBanner(ctx));   /* null when there is nothing to warn about */
     children.push(filterBypassBanner(ctx)); /* likewise; above the traffic strip on purpose */
     children.push(trafficStrip(ctx));
+    children.push(ctx.hosts.length ? h("div", { class: "mt-6" }, topHosts(ctx)) : null);
     children.push(h("div", { class: "mt-6" }, statsGrid(ctx)));
 
     if (posture !== "calm" && ctx.attacks.active.length) {
@@ -542,6 +559,41 @@
       ]),
       h("div", { class: "host-agg__chart" }, K.areaChart(spark && spark.length ? spark : [0, 0], { color: color, height: 48 }))
     ]));
+  }
+
+  function topHosts(ctx) {
+    function panel(dir) {
+      var out = dir === "outgoing";
+      var ranked = ctx.hosts.map(function (host) {
+        return { host: host, rates: out ? host.out_rates : host.rates };
+      }).filter(function (item) {
+        return (item.rates.mbps || 0) > 0 || (item.rates.pps || 0) > 0;
+      }).sort(function (a, b) {
+        var mbps = (b.rates.mbps || 0) - (a.rates.mbps || 0);
+        if (mbps) return mbps;
+        var pps = (b.rates.pps || 0) - (a.rates.pps || 0);
+        if (pps) return pps;
+        return a.host.target < b.host.target ? -1 : a.host.target > b.host.target ? 1 : 0;
+      }).slice(0, 10);
+      var rows = ranked.map(function (item, index) {
+        return h("div", { class: "top-host" }, [
+          h("span", { class: "top-host__rank", text: String(index + 1) }),
+          h("span", { class: "top-host__ip", attrs: { title: item.host.target }, text: item.host.target }),
+          h("span", { class: "top-host__mbps", text: I.mbps(item.rates.mbps || 0) }),
+          h("span", { class: "top-host__pps", text: I.pps(item.rates.pps || 0) })
+        ]);
+      });
+      return h("div", { class: "card" }, [
+        h("div", { class: "card__head" }, h("div", { class: "card__title" }, [
+          w.icon(out ? "arrow-up" : "arrow-down"),
+          h("span", { text: I.t("ho.top10") + " · " + I.t(out ? "ov.egress" : "ov.ingress") })
+        ])),
+        h("div", { class: "card__body" }, ranked.length
+          ? h("div", { class: "top-hosts" }, rows)
+          : h("div", { class: "top-hosts__empty", text: I.t("ho.notraffic") }))
+      ]);
+    }
+    return h("div", { class: "cols-2 hosts-top10" }, [panel("incoming"), panel("outgoing")]);
   }
 
   /* ===== HOSTS (top talkers) ===== */

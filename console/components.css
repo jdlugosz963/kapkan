@@ -76,6 +76,17 @@
 .tcard__now small { font-size: var(--t-xs); color: var(--muted); font-weight: 500; }
 .tcard__chart { height: 72px; position: relative; }
 .tcard__chart svg { width: 100%; height: 100%; display: block; }
+.upstream-bars { display: grid; gap: var(--s-2); margin-top: var(--s-3); padding-top: var(--s-3); border-top: 1px solid var(--border); }
+.upstream-bar { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 4px 10px; align-items: baseline; }
+.upstream-bar__key { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); font-size: var(--t-sm); color: var(--text); }
+.upstream-bar__rate { font-size: var(--t-xs); color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.upstream-bar__pct { min-width: 42px; text-align: right; font-size: var(--t-xs); font-weight: 600; color: var(--text-strong); font-variant-numeric: tabular-nums; }
+.upstream-bar__track { grid-column: 1 / -1; width: 100%; height: 7px; overflow: hidden; border: 0; border-radius: 3px; appearance: none; background: var(--inset); }
+.upstream-bar__track::-webkit-progress-bar { border-radius: 3px; background: var(--inset); }
+.upstream-bar__track::-webkit-progress-value { border-radius: 3px; background: var(--chart-in); }
+.upstream-bar__track.is-egress::-webkit-progress-value { background: var(--chart-out); }
+.upstream-bar__track::-moz-progress-bar { border-radius: 3px; background: var(--chart-in); }
+.upstream-bar__track.is-egress::-moz-progress-bar { background: var(--chart-out); }
 
 /* Active attacks table — compact rows that expand inline to the full detail.
    Scales to many simultaneous attacks where hero cards would overflow. */
@@ -143,6 +154,16 @@
 .host-agg__sub { color: var(--muted); font-weight: 500; font-size: var(--t-sm); }
 .host-agg__chart { flex: 1; height: 48px; min-width: 0; }
 .host-agg__chart svg { width: 100%; height: 100%; display: block; }
+.hosts-top10 { margin-bottom: var(--s-4); }
+.top-hosts { display: grid; }
+.top-host { min-height: 34px; display: grid; grid-template-columns: 24px minmax(0, 1fr) auto auto; gap: var(--s-3); align-items: center; border-bottom: 1px solid var(--border); }
+.top-host:last-child { border-bottom: 0; }
+.top-host__rank { color: var(--faint); font-size: var(--t-xs); font-variant-numeric: tabular-nums; }
+.top-host__ip { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); font-size: var(--t-sm); color: var(--text); }
+.top-host__mbps, .top-host__pps { white-space: nowrap; text-align: right; font-size: var(--t-xs); font-variant-numeric: tabular-nums; }
+.top-host__mbps { color: var(--text-strong); font-weight: 650; }
+.top-host__pps { min-width: 62px; color: var(--muted); }
+.top-hosts__empty { min-height: 64px; display: grid; place-items: center; color: var(--muted); font-size: var(--t-sm); text-align: center; }
 
 /* ============================================================================
    Escalation ladder stepper — THE hero component

@@ -217,6 +217,8 @@ activeAttacks: { one: "# attaque active", other: "# attaques actives" },
       "ho.empty.title": "Aucun hôte suivi pour l'instant",
       "ho.empty.sub": "Les principaux émetteurs se remplissent à partir des échantillons de flux. Sur une nouvelle installation, cela se remplit en quelques cycles d'interrogation.",
       "ho.headline": "Classés par débit (Mbit/s)",
+	  "ho.top10": "Top 10 des hôtes",
+	  "ho.notraffic": "Aucun trafic dans cette direction.",
 
       /* hostgroups */
       "hg.policy": "Politique",

@@ -18,6 +18,7 @@ import (
 	"context"
 	"log/slog"
 	"net/netip"
+	"sort"
 	"strconv"
 	"sync"
 	"time"
@@ -92,8 +93,15 @@ func (c *counters) rates(w float64) Rates {
 // Unix second it represents; a bucket whose epoch does not match the second
 // being read is stale and counts as empty.
 type bucket struct {
-	epoch int64
-	dirs  [2]counters
+	epoch     int64
+	dirs      [2]counters
+	upstreams [2][]upstreamCounter
+}
+
+type upstreamCounter struct {
+	key     string
+	bytes   uint64
+	packets uint64
 }
 
 // attackState is the lifecycle of one (host or group, direction) attack.
@@ -362,7 +370,7 @@ func (e *Engine) Process(f flow.Flow) {
 			).Add(float64(f.Bytes * rate))
 		}
 		if r, ok := cfg.InboundRate(f.Exporter, f.InIf, rate); ok {
-			e.record(f.DstAddr, dirIn, f, r, epoch)
+			e.record(f.DstAddr, dirIn, f, r, epoch, upstreamKey(cfg, f.Exporter, f.InIf))
 		}
 	}
 	if cfg.OutgoingEnabled && f.SrcAddr.IsValid() && cfg.InNetworks(f.SrcAddr) {
@@ -372,13 +380,13 @@ func (e *Engine) Process(f flow.Flow) {
 			).Add(float64(f.Bytes * rate))
 		}
 		if r, ok := cfg.OutboundRate(f.Exporter, f.OutIf, rate); ok {
-			e.record(f.SrcAddr, dirOut, f, r, epoch)
+			e.record(f.SrcAddr, dirOut, f, r, epoch, upstreamKey(cfg, f.Exporter, f.OutIf))
 		}
 	}
 }
 
 // record accumulates one flow into addr's bucket for the given direction.
-func (e *Engine) record(addr netip.Addr, dir int, f flow.Flow, rate uint64, epoch int64) {
+func (e *Engine) record(addr netip.Addr, dir int, f flow.Flow, rate uint64, epoch int64, upstream string) {
 	sh := e.shardFor(addr)
 	sh.mu.Lock()
 	hs := sh.hosts[addr]
@@ -388,11 +396,29 @@ func (e *Engine) record(addr netip.Addr, dir int, f flow.Flow, rate uint64, epoc
 	}
 	b := &hs.ring[epoch%int64(e.ringSize)]
 	if b.epoch != epoch {
-		*b = bucket{epoch: epoch}
+		b.epoch = epoch
+		b.dirs = [2]counters{}
+		b.upstreams[dirIn] = b.upstreams[dirIn][:0]
+		b.upstreams[dirOut] = b.upstreams[dirOut][:0]
 	}
 	c := &b.dirs[dir]
 	bytes := f.Bytes * rate
 	packets := f.Packets * rate
+	upstreamCounters := b.upstreams[dir]
+	var upstreamEntry *upstreamCounter
+	for i := range upstreamCounters {
+		if upstreamCounters[i].key == upstream {
+			upstreamEntry = &upstreamCounters[i]
+			break
+		}
+	}
+	if upstreamEntry == nil {
+		upstreamCounters = append(upstreamCounters, upstreamCounter{key: upstream})
+		b.upstreams[dir] = upstreamCounters
+		upstreamEntry = &upstreamCounters[len(upstreamCounters)-1]
+	}
+	upstreamEntry.bytes += bytes
+	upstreamEntry.packets += packets
 	c.bytes[clTotal] += bytes
 	c.packets[clTotal] += packets
 	// sFlow exports one sample per packet; only flow-aggregating protocols
@@ -1270,17 +1296,61 @@ func (e *Engine) emitOngoing(ev Event) {
 // Metric/Direction describe the active attack (incoming reported first when
 // both directions are under attack).
 type HostStat struct {
-	Target    netip.Addr `json:"target"`
-	Group     string     `json:"group"`
-	Rates     Rates      `json:"rates"`
-	OutRates  Rates      `json:"rates_out"`
-	InAttack  bool       `json:"in_attack"`
-	Metric    Metric     `json:"metric,omitempty"`
-	Direction Direction  `json:"direction,omitempty"`
+	Target       netip.Addr     `json:"target"`
+	Group        string         `json:"group"`
+	Rates        Rates          `json:"rates"`
+	OutRates     Rates          `json:"rates_out"`
+	Upstreams    []UpstreamRate `json:"upstreams,omitempty"`
+	OutUpstreams []UpstreamRate `json:"upstreams_out,omitempty"`
+	InAttack     bool           `json:"in_attack"`
+	Metric       Metric         `json:"metric,omitempty"`
+	Direction    Direction      `json:"direction,omitempty"`
 	// Baseline / OutBaseline are the learned normal levels (base trio
 	// only), present once the host has been observed with baselines on.
 	Baseline    *Rates `json:"baseline,omitempty"`
 	OutBaseline *Rates `json:"baseline_out,omitempty"`
+}
+
+// UpstreamRate is one boundary interface's current sampling-corrected rate.
+type UpstreamRate struct {
+	Key  string  `json:"key"`
+	Mbps float64 `json:"mbps"`
+	PPS  float64 `json:"pps"`
+}
+
+func (e *Engine) windowedUpstreams(hs *hostState, nowSec int64, dir int) []UpstreamRate {
+	totals := make(map[string]*upstreamCounter)
+	for s := nowSec - e.windowSec; s <= nowSec-1; s++ {
+		b := &hs.ring[s%int64(e.ringSize)]
+		if b.epoch != s {
+			continue
+		}
+		for _, current := range b.upstreams[dir] {
+			total := totals[current.key]
+			if total == nil {
+				total = &upstreamCounter{key: current.key}
+				totals[current.key] = total
+			}
+			total.bytes += current.bytes
+			total.packets += current.packets
+		}
+	}
+	window := float64(e.windowSec)
+	out := make([]UpstreamRate, 0, len(totals))
+	for _, total := range totals {
+		out = append(out, UpstreamRate{
+			Key:  total.key,
+			Mbps: float64(total.bytes) * 8 / 1_000_000 / window,
+			PPS:  float64(total.packets) / window,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Mbps == out[j].Mbps {
+			return out[i].Key < out[j].Key
+		}
+		return out[i].Mbps > out[j].Mbps
+	})
+	return out
 }
 
 // Snapshot returns the current windowed rates for every tracked host. It is
@@ -1295,11 +1365,13 @@ func (e *Engine) Snapshot() []HostStat {
 			in, outRates, _ := e.windowedRates(hs, nowSec)
 			g := cfg.GroupFor(addr)
 			st := HostStat{
-				Target:   addr,
-				Group:    g.Name,
-				Rates:    in,
-				OutRates: outRates,
-				InAttack: hs.inAnyAttack(),
+				Target:       addr,
+				Group:        g.Name,
+				Rates:        in,
+				OutRates:     outRates,
+				Upstreams:    e.windowedUpstreams(hs, nowSec, dirIn),
+				OutUpstreams: e.windowedUpstreams(hs, nowSec, dirOut),
+				InAttack:     hs.inAnyAttack(),
 			}
 			// Only surface learned baselines while baselines are actually
 			// configured for the host's group; otherwise the values are

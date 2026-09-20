@@ -607,6 +607,41 @@ func TestSnapshot(t *testing.T) {
 	}
 }
 
+func TestSnapshotUpstreamRates(t *testing.T) {
+	yaml := strings.Replace(baseYAML, "sampling:\n  default_rate: 1000", "sampling:\n"+
+		"  default_rate: 1000\n"+
+		"  boundary:\n"+
+		"    - exporter: \"10.1.32.2\"\n"+
+		"      external_ifindexes: [71, 72]\n"+
+		"      interface_labels: {71: \"Netia\", 72: \"NASK\"}", 1)
+	cfg, err := config.Parse([]byte(yaml))
+	if err != nil {
+		t.Fatalf("parse config: %v", err)
+	}
+	clk := newMockClock()
+	e := New(config.NewStore("", cfg), WithClock(clk.Now), WithWindow(1))
+	dst := "203.0.113.40"
+	exporter := netip.MustParseAddr("10.1.32.2")
+	for iface, packets := range map[uint32]uint64{71: 60, 72: 40} {
+		f := udpFlow(dst, packets*100, packets, 10)
+		f.Exporter = exporter
+		f.InIf = iface
+		e.Process(f)
+	}
+	clk.Advance(time.Second)
+
+	snap := e.Snapshot()
+	if len(snap) != 1 || len(snap[0].Upstreams) != 2 {
+		t.Fatalf("snapshot upstreams = %+v, want two entries", snap)
+	}
+	if got := snap[0].Upstreams[0]; got.Key != "Netia" || got.PPS != 600 || got.Mbps != 0.48 {
+		t.Errorf("first upstream = %+v, want Netia at 600 pps / 0.48 Mbps", got)
+	}
+	if got := snap[0].Upstreams[1]; got.Key != "NASK" || got.PPS != 400 || got.Mbps != 0.32 {
+		t.Errorf("second upstream = %+v, want NASK at 400 pps / 0.32 Mbps", got)
+	}
+}
+
 // waitEvent reads one event or fails after a short timeout.
 func waitEvent(t *testing.T, events chan Event) Event {
 	t.Helper()

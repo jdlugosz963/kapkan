@@ -175,6 +175,7 @@
     return {
       target: hs.target, group: hs.group,
       rates: hs.rates || {}, out_rates: hs.rates_out || {},
+	  upstreams: hs.upstreams || [], out_upstreams: hs.upstreams_out || [],
       baseline: hs.baseline || null, out_baseline: hs.baseline_out || null,
       in_attack: !!hs.in_attack, metric: hs.metric, direction: hs.direction
     };
@@ -483,11 +484,30 @@
     },
     aggregate: function () {
       var inM = 0, outM = 0, inP = 0, outP = 0;
+    var inUpstreams = Object.create(null), outUpstreams = Object.create(null);
+    function addUpstreams(target, list) {
+    (list || []).forEach(function (upstream) {
+      var current = target[upstream.key];
+      if (!current) current = target[upstream.key] = { key: upstream.key, mbps: 0, pps: 0 };
+      current.mbps += upstream.mbps || 0;
+      current.pps += upstream.pps || 0;
+    });
+    }
+    function sortedUpstreams(source) {
+    return Object.keys(source).map(function (key) { return source[key]; }).sort(function (a, b) {
+      return b.mbps - a.mbps || a.key.localeCompare(b.key);
+    });
+    }
       cache.hosts.forEach(function (hHost) {
         inM += hHost.rates.mbps || 0; inP += hHost.rates.pps || 0;
         outM += hHost.out_rates.mbps || 0; outP += hHost.out_rates.pps || 0;
+    addUpstreams(inUpstreams, hHost.upstreams);
+    addUpstreams(outUpstreams, hHost.out_upstreams);
       });
-      return { in_mbps: inM, out_mbps: outM, in_pps: inP, out_pps: outP };
+    return {
+    in_mbps: inM, out_mbps: outM, in_pps: inP, out_pps: outP,
+    in_upstreams: sortedUpstreams(inUpstreams), out_upstreams: sortedUpstreams(outUpstreams)
+    };
     },
 
     ban: function (ip) {

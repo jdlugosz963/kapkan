@@ -181,6 +181,13 @@ func asnKey(info geoip.Info) string {
 	return k
 }
 
+func upstreamKey(cfg *config.Config, exporter netip.Addr, iface uint32) string {
+	if label, ok := cfg.BoundaryLabel(exporter, iface); ok {
+		return label
+	}
+	return exporter.String() + ":" + strconv.FormatUint(uint64(iface), 10)
+}
+
 // add accumulates one matching flow into the aggregates and, when capture
 // is set and the cap allows, into the raw flow list. dir tells which
 // endpoint is the remote side: for incoming attacks the remote is the
@@ -206,11 +213,7 @@ func (a *sampleAggregator) add(f *flow.Flow, dir int8, capture bool) {
 	if dir == dirOut {
 		iface = f.OutIf
 	}
-	upstream, ok := a.boundary.BoundaryLabel(f.Exporter, iface)
-	if !ok {
-		upstream = f.Exporter.String() + ":" + strconv.FormatUint(uint64(iface), 10)
-	}
-	bump(a.upstreams, upstream, packets, bytes)
+	bump(a.upstreams, upstreamKey(a.boundary, f.Exporter, iface), packets, bytes)
 	// Attribute the attribution endpoint (the same "source" as TopSources:
 	// the remote attacker for incoming, the victim for outgoing) to its ASN.
 	if a.asn {

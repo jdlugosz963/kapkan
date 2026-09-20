@@ -212,6 +212,8 @@ activeAttacks: { one: "# ataque activo", other: "# ataques activos" },
       "ho.empty.title": "Aún no hay hosts monitorizados",
       "ho.empty.sub": "Los principales emisores se llenan a partir de las muestras de flujo. En una instalación nueva, esto se llena en unos pocos ciclos de sondeo.",
       "ho.headline": "Ordenados por rendimiento (Mbit/s)",
+	  "ho.top10": "10 hosts principales",
+	  "ho.notraffic": "No hay tráfico en esta dirección.",
 
       /* hostgroups */
       "hg.policy": "Política",
