@@ -37,6 +37,7 @@
     role: "viewer", /* least privilege until /status reports the caller's role */
     collapsed: false,
     hostDir: "incoming",
+    upstreamMetric: "aggregate",
     filters: { scope: "", dir: "", type: "", group: "", q: "" },
     expanded: new Set(),
     drawer: { open: false, live: false, key: null, attack: null },
@@ -355,6 +356,7 @@
     setLocale: function (loc) { I.set(loc); state.localeOpen = false; buildShell(); renderShellDynamic(buildCtx()); renderView(); if (state.drawer.open) renderDrawer(); },
     setFilter: function (k, v) { state.filters[k] = v; renderView(); },
     setHostDir: function (d) { state.hostDir = d; renderView(); },
+    setUpstreamMetric: function (metric) { state.upstreamMetric = metric; renderView(); },
     toggleHost: function (ip) { if (state.expanded.has(ip)) state.expanded.delete(ip); else state.expanded.add(ip); renderView(); },
     loadTraffic: function (key) {
       var t = state.traffic;

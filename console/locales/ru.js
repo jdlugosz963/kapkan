@@ -93,6 +93,7 @@ activeAttacks: { one: "# активная атака", few: "# активные 
       "ov.traffic": "Совокупный трафик",
       "ov.ingress": "Входящий", "ov.egress": "Исходящий",
       "ov.now": "сейчас", "ov.attackwindow": "Окно атаки",
+      "ov.upstreammetric": "Процент аплинка", "ov.aggregateShare": "Доля агрегата", "ov.bandwidthUse": "Использование полосы",
       "ov.heroline": "{n} требует внимания",
       "stat.activeAttacks": "Активные атаки",
       "stat.activeBans": "Активные блокировки",

@@ -47,6 +47,7 @@
     var markerFrac = null;
     var idx = b.inAttack.indexOf(true);
     if (idx >= 0 && ctx.posture !== "calm") markerFrac = idx / Math.max(1, b.inAttack.length - 1);
+    var showCapacity = ctx.state.upstreamMetric === "capacity";
   function upstreamBars(list, total, color) {
     if (!list || !list.length) return null;
     return h("div", { class: "upstream-bars" }, list.slice(0, 16).map(function (upstream) {
@@ -82,14 +83,19 @@
           h("div", { class: "tcard__now" }, [now, " ", h("small", { text: I.t("ov.now") })])
         ]),
 		h("div", { class: "tcard__chart" }, K.areaChart(vals.length ? vals : [0, 0], { color: color, markerFrac: markerFrac })),
-    upstreamBars(upstreams, total, color),
-    capacityBars(pools, color)
+    showCapacity ? capacityBars(pools, color) : upstreamBars(upstreams, total, color)
       ]);
     }
     return h("div", { class: "card" }, [
       h("div", { class: "card__head" }, [
         h("div", { class: "card__title" }, [w.icon("activity"), h("span", { text: I.t("ov.traffic") })]),
-        markerFrac != null ? K.badge("badge--active", I.t("ov.attackwindow"), "alert") : null
+        h("div", { class: "row" }, [
+          markerFrac != null ? K.badge("badge--active", I.t("ov.attackwindow"), "alert") : null,
+          (ctx.status.upstream_capacity_pools || []).length ? h("div", { class: "seg", attrs: { role: "group", "aria-label": I.t("ov.upstreammetric") } }, [
+            h("button", { class: "seg__btn" + (!showCapacity ? " is-on" : ""), text: I.t("ov.aggregateShare"), attrs: { "aria-pressed": String(!showCapacity) }, onclick: function () { ctx.actions.setUpstreamMetric("aggregate"); } }),
+            h("button", { class: "seg__btn" + (showCapacity ? " is-on" : ""), text: I.t("ov.bandwidthUse"), attrs: { "aria-pressed": String(showCapacity) }, onclick: function () { ctx.actions.setUpstreamMetric("capacity"); } })
+          ]) : null
+        ])
       ]),
       h("div", { class: "card__body" }, h("div", { class: "traffic-strip" }, [
     card("ov.ingress", "var(--chart-in)", ctx.buf.aggIn, I.mbps(agg.in_mbps), "var(--chart-in)", agg.in_upstreams, agg.in_mbps, agg.in_capacity_pools),
