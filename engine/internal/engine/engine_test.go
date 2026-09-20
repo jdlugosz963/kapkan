@@ -140,6 +140,13 @@ func TestWindowedRateMath(t *testing.T) {
 	}
 }
 
+func TestDefaultWindow(t *testing.T) {
+	e := New(testStore(t))
+	if e.windowSec != 15 {
+		t.Fatalf("windowSec = %d, want 15", e.windowSec)
+	}
+}
+
 // TestFlowsPerSecByProtocol pins the flows_per_sec semantics: NetFlow/IPFIX
 // records are aggregated flows and feed the flows counter, while sFlow samples
 // (one per packet) do not — otherwise flows_per_sec would be a structural
