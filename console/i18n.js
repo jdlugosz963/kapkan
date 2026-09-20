@@ -37,7 +37,7 @@
       this._pr  = new Intl.PluralRules(loc);
       this._rtf = new Intl.RelativeTimeFormat(loc, { numeric: "auto" });
       this._tf  = new Intl.DateTimeFormat(loc, { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
-      this._dtf = new Intl.DateTimeFormat(loc, { dateStyle: "medium", timeStyle: "short" });
+      this._dtf = new Intl.DateTimeFormat(loc, { dateStyle: "medium", timeStyle: "short", hourCycle: "h23" });
       if (!silent) this._subs.forEach(function (fn) { fn(loc); });
     },
 
