@@ -35,6 +35,9 @@ type histQuerier struct {
 func (f *histQuerier) QueryTraffic(context.Context, string, time.Time, time.Time, int) ([]storage.TrafficPoint, error) {
 	return nil, nil
 }
+func (f *histQuerier) QueryRecentAttacks(context.Context, int) ([]storage.AttackHistoryRow, error) {
+	return nil, nil
+}
 func (f *histQuerier) QueryAudit(context.Context, storage.AuditFilter) ([]storage.AuditRow, error) {
 	return nil, nil
 }

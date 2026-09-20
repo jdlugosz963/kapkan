@@ -99,20 +99,26 @@ func do(t *testing.T, h http.Handler, method, path, body string) *httptest.Respo
 }
 
 type fakeQuerier struct {
-	pts       []storage.TrafficPoint
-	err       error
-	gotKey    string
-	gotFrom   time.Time
-	gotTo     time.Time
-	gotStep   int
-	auditRows []storage.AuditRow
-	auditErr  error
-	gotAudit  storage.AuditFilter
+	pts         []storage.TrafficPoint
+	err         error
+	gotKey      string
+	gotFrom     time.Time
+	gotTo       time.Time
+	gotStep     int
+	auditRows   []storage.AuditRow
+	auditErr    error
+	gotAudit    storage.AuditFilter
+	historyRows []storage.AttackHistoryRow
+	historyErr  error
 }
 
 func (f *fakeQuerier) QueryTraffic(_ context.Context, key string, from, to time.Time, step int) ([]storage.TrafficPoint, error) {
 	f.gotKey, f.gotFrom, f.gotTo, f.gotStep = key, from, to, step
 	return f.pts, f.err
+}
+
+func (f *fakeQuerier) QueryRecentAttacks(context.Context, int) ([]storage.AttackHistoryRow, error) {
+	return f.historyRows, f.historyErr
 }
 
 func (f *fakeQuerier) QueryAudit(_ context.Context, filter storage.AuditFilter) ([]storage.AuditRow, error) {
@@ -442,6 +448,31 @@ func TestAttacksEndpoint(t *testing.T) {
 	}
 	if len(resp.Recent) != 1 || resp.Recent[0].Active {
 		t.Errorf("recent = %+v, want one inactive attack", resp.Recent)
+	}
+}
+
+func TestAttacksEndpointLoadsPersistedRecent(t *testing.T) {
+	s := testServer(t, storeFromYAML(t, apiYAML))
+	endedAt := "2026-09-20 19:38:51"
+	s.SetQuerier(&fakeQuerier{historyRows: []storage.AttackHistoryRow{{
+		AttackID: "persisted-1", Version: 2, Status: "ended",
+		StartedAt: "2026-09-20 19:36:04", EndedAt: &endedAt,
+		Scope: "host", Target: "203.0.113.50", Group: "global", Direction: "incoming",
+		Metric: "mbps", Rate: 250, Threshold: 200,
+		Rates:          `{"pps":1000,"mbps":250,"flows_per_sec":10}`,
+		Sample:         `{"top_sources":[{"key":"198.51.100.7"}]}`,
+		Classification: `{"type":"tcp_flood","confidence":0.9}`,
+		Reason:         `{}`,
+	}}})
+	rec := do(t, s.Handler(), http.MethodGet, "/api/v1/attacks", "")
+	var resp struct {
+		Recent []Attack `json:"recent"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Recent) != 1 || resp.Recent[0].ID != "persisted-1" || resp.Recent[0].Active || resp.Recent[0].Sample == nil || resp.Recent[0].EndedAt.IsZero() {
+		t.Fatalf("persisted recent = %+v, want complete ended attack", resp.Recent)
 	}
 }
 
@@ -1239,11 +1270,11 @@ func TestGlobalGroupNotLeakedToScopedToken(t *testing.T) {
 // Handlers run synchronously inside ServeHTTP, so no locking is needed.
 type fakeAuditWriter struct{ rows []storage.AuditRow }
 
-func (f *fakeAuditWriter) WriteAttack(storage.AttackRow)     {}
-func (f *fakeAuditWriter) WriteTraffic([]storage.TrafficRow) {}
-func (f *fakeAuditWriter) WriteAudit(r storage.AuditRow)     { f.rows = append(f.rows, r) }
-func (f *fakeAuditWriter) Start(context.Context)             {}
-func (f *fakeAuditWriter) Stop()                             {}
+func (f *fakeAuditWriter) WriteAttackHistory(storage.AttackHistoryRow) {}
+func (f *fakeAuditWriter) WriteTraffic([]storage.TrafficRow)           {}
+func (f *fakeAuditWriter) WriteAudit(r storage.AuditRow)               { f.rows = append(f.rows, r) }
+func (f *fakeAuditWriter) Start(context.Context)                       {}
+func (f *fakeAuditWriter) Stop()                                       {}
 
 func (f *fakeAuditWriter) WriteEdgeWindows([]storage.EdgeWindowRow) {}
 func (f *fakeAuditWriter) WriteEdgeSources([]storage.EdgeSourceRow) {}

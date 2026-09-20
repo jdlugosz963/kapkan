@@ -812,8 +812,9 @@ storage:
 
 kapkan talks to ClickHouse's **HTTP interface** with the standard library — no driver
 dependency; the only external dependency is the ClickHouse server itself. On start it
-creates six MergeTree tables (idempotently): `attack_events` (every start/end with type,
-direction, rates, sample top-sources, top-ASNs when GeoIP is enabled, ban state),
+creates six tables (idempotently): `attack_history` (`ReplacingMergeTree(version)`, one complete
+versioned lifecycle record per attack, including its sample, classification, reason, final and
+peak rates, and mitigation state),
 `traffic` (periodic per-host rate and baseline snapshots), `audit_events` (who did
 what, with which role and tenant, to which target, and how it turned out — served back on
 `/api/v1/audit`), and the edge history — `edge_windows` (one row per edge node, zone and
@@ -827,8 +828,8 @@ Persistence is **best-effort and never blocks detection**: rows go onto a bounde
 `storage_rows_total{result="dropped"}`) rather than stalling the engine. Without the block,
 kapkan runs entirely in-process on live data.
 
-> Note: per-ASN top-talkers are persisted on `attack_events` (in the `top_asns` column) when
-> GeoIP is enabled; the `traffic` table itself still persists per-host snapshots only, and
+> Note: each attack's complete sample, including top-ASN attribution when GeoIP is enabled, is
+> persisted in `attack_history`; the `traffic` table itself still persists per-host snapshots only, and
 > per-hostgroup totals are not yet snapshotted — a candidate for a follow-up.
 
 ## Migrating from FastNetMon

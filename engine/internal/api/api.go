@@ -8,6 +8,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/netip"
@@ -33,6 +34,7 @@ const maxRecentAttacks = 100
 // Attack is the API view of one detected attack (active or historical).
 // Group-scoped attacks (a hostgroup's total traffic) carry no target.
 type Attack struct {
+	ID     string       `json:"id,omitempty"`
 	Scope  engine.Scope `json:"scope"`
 	Target netip.Addr   `json:"target"`
 	Group  string       `json:"group,omitempty"`
@@ -44,6 +46,7 @@ type Attack struct {
 	Rate      float64                 `json:"rate"`
 	Threshold float64                 `json:"threshold"`
 	Rates     engine.Rates            `json:"rates"`
+	PeakRates engine.Rates            `json:"peak_rates"`
 	Active    bool                    `json:"active"`
 	BanState  mitigate.BanState       `json:"ban_state,omitempty"`
 	Method    config.MitigationMethod `json:"method,omitempty"`
@@ -225,6 +228,7 @@ func auditRow(c caller, action, result, target, targetType, reason, banState str
 // endpoint. ban may be nil.
 func (s *Server) RecordAttackStarted(ev engine.Event, ban *mitigate.Ban) {
 	a := &Attack{
+		ID:             ev.AttackID,
 		Scope:          ev.Scope,
 		Target:         ev.Target,
 		Group:          ev.Group,
@@ -233,6 +237,7 @@ func (s *Server) RecordAttackStarted(ev engine.Event, ban *mitigate.Ban) {
 		Rate:           ev.Rate,
 		Threshold:      ev.Threshold,
 		Rates:          ev.Rates,
+		PeakRates:      ev.PeakRates,
 		Active:         true,
 		StartedAt:      ev.At,
 		Sample:         ev.Sample,
@@ -278,6 +283,7 @@ func (s *Server) RecordAttackEnded(ev engine.Event, ban *mitigate.Ban) {
 	a.Active = false
 	a.EndedAt = ev.At
 	a.Rates = ev.Rates
+	a.PeakRates = ev.PeakRates
 	if ban != nil {
 		a.BanState = ban.State
 		// The final measured tally, kept on the record because the ban's rules
@@ -676,11 +682,11 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := map[string]any{
-		"dry_run":        cfg.DryRun,
-		"uptime_seconds": int64(time.Since(s.start).Seconds()),
-		"active_attacks": activeAttacks,
-		"active_bans":    activeBans,
-		"hostgroups":     groups,
+		"dry_run":                 cfg.DryRun,
+		"uptime_seconds":          int64(time.Since(s.start).Seconds()),
+		"active_attacks":          activeAttacks,
+		"active_bans":             activeBans,
+		"hostgroups":              groups,
 		"upstream_capacity_pools": cfg.UpstreamCapacityPools(),
 		// docs_url is public documentation metadata, not deployment topology;
 		// all roles need it so the console can offer the same help link.
@@ -823,6 +829,32 @@ func (s *Server) handleAttacks(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.mu.Unlock()
+	if s.querier != nil {
+		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+		stored, err := s.querier.QueryRecentAttacks(ctx, maxRecentAttacks)
+		cancel()
+		if err != nil {
+			s.log.Warn("read attack history", "err", err)
+		} else {
+			seen := make(map[string]struct{}, len(recent))
+			for _, attack := range recent {
+				if attack.ID != "" {
+					seen[attack.ID] = struct{}{}
+				}
+			}
+			for _, row := range stored {
+				attack, err := attackFromHistory(row)
+				if err != nil {
+					s.log.Warn("decode stored attack", "attack_id", row.AttackID, "err", err)
+					continue
+				}
+				if _, exists := seen[attack.ID]; exists || !visibleAttack(c, cfg, attack) {
+					continue
+				}
+				recent = append(recent, stamp(attack))
+			}
+		}
+	}
 	// Outside s.mu: this reads engine state, and no invariant needs the two held
 	// together. Ended attacks are not touched — RecordAttackEnded already gave
 	// them the engine's final measurement.
@@ -833,6 +865,54 @@ func (s *Server) handleAttacks(w http.ResponseWriter, r *http.Request) {
 		"active": active,
 		"recent": recent,
 	})
+}
+
+func attackFromHistory(row storage.AttackHistoryRow) (Attack, error) {
+	startedAt, err := time.ParseInLocation("2006-01-02 15:04:05", row.StartedAt, time.UTC)
+	if err != nil {
+		return Attack{}, fmt.Errorf("started_at: %w", err)
+	}
+	attack := Attack{
+		ID: row.AttackID, Scope: engine.Scope(row.Scope), Group: row.Group,
+		Direction: engine.Direction(row.Direction), Metric: engine.Metric(row.Metric),
+		Rate: row.Rate, Threshold: row.Threshold, Active: false,
+		BanState: mitigate.BanState(row.BanState), Method: config.MitigationMethod(row.Method),
+		Route: row.Route, DryRun: row.DryRun != 0, StartedAt: startedAt,
+	}
+	if row.Target != "" {
+		if attack.Target, err = netip.ParseAddr(row.Target); err != nil {
+			return Attack{}, fmt.Errorf("target: %w", err)
+		}
+	}
+	if row.EndedAt != nil {
+		if attack.EndedAt, err = time.ParseInLocation("2006-01-02 15:04:05", *row.EndedAt, time.UTC); err != nil {
+			return Attack{}, fmt.Errorf("ended_at: %w", err)
+		}
+	}
+	if err := json.Unmarshal([]byte(row.Rates), &attack.Rates); err != nil {
+		return Attack{}, fmt.Errorf("rates: %w", err)
+	}
+	if row.PeakRates == "" {
+		attack.PeakRates = attack.Rates
+	} else if err := json.Unmarshal([]byte(row.PeakRates), &attack.PeakRates); err != nil {
+		return Attack{}, fmt.Errorf("peak_rates: %w", err)
+	}
+	if row.Sample != "" && json.Unmarshal([]byte(row.Sample), &attack.Sample) != nil {
+		return Attack{}, errors.New("sample")
+	}
+	if row.Classification != "" && json.Unmarshal([]byte(row.Classification), &attack.Classification) != nil {
+		return Attack{}, errors.New("classification")
+	}
+	if row.Reason != "" && json.Unmarshal([]byte(row.Reason), &attack.Reason) != nil {
+		return Attack{}, errors.New("reason")
+	}
+	if row.FlowSpec != "" && json.Unmarshal([]byte(row.FlowSpec), &attack.FlowSpec) != nil {
+		return Attack{}, errors.New("flowspec")
+	}
+	if row.Dataplane != "" && json.Unmarshal([]byte(row.Dataplane), &attack.Dataplane) != nil {
+		return Attack{}, errors.New("dataplane")
+	}
+	return attack, nil
 }
 
 // refreshRates replaces a LIVE attack's measurement with the engine's current

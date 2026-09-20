@@ -289,7 +289,7 @@ func (f *fakeClickHouse) count(table string) int {
 }
 
 // TestEndToEndStorage replays an attack against a dry-run instance whose
-// storage points at a fake ClickHouse, and asserts an attack_events row and
+// storage points at a fake ClickHouse, and asserts an attack_history row and
 // a traffic snapshot are persisted — the full ingest→detect→persist path.
 func TestEndToEndStorage(t *testing.T) {
 	if testing.Short() {
@@ -367,13 +367,13 @@ func TestEndToEndStorage(t *testing.T) {
 	}()
 
 	ok := waitFor(t, 20*time.Second, func() bool {
-		return fake.count("attack_events") >= 1 && fake.count("traffic") >= 1
+		return fake.count("attack_history") >= 1 && fake.count("traffic") >= 1
 	})
 	close(stop)
 	<-done
 	if !ok {
-		t.Fatalf("storage did not receive rows: attack_events=%d traffic=%d",
-			fake.count("attack_events"), fake.count("traffic"))
+		t.Fatalf("storage did not receive rows: attack_history=%d traffic=%d",
+			fake.count("attack_history"), fake.count("traffic"))
 	}
 }
 

@@ -71,12 +71,13 @@ func (r *recorder) inserts(table string) []string {
 	return append([]string(nil), r.insert[table]...)
 }
 
-func sampleAttack() AttackRow {
-	return AttackRow{
-		EventTime: "2026-06-13 12:00:00", Kind: "attack_started", Scope: "host",
+func sampleAttack() AttackHistoryRow {
+	return AttackHistoryRow{
+		AttackID: "attack-1", Version: 1, Status: "active",
+		StartedAt: "2026-06-13 12:00:00", UpdatedAt: "2026-06-13 12:00:00", Scope: "host",
 		Target: "203.0.113.20", Group: "global", Direction: "incoming",
 		AttackType: "ntp_amplification", Metric: "pps", Rate: 200000, Threshold: 80000,
-		PPS: 200000, DryRun: 1, TopSources: "198.51.100.7",
+		PPS: 200000, PeakPPS: 200000, DryRun: 1, Sample: `{"top_sources":["198.51.100.7"]}`,
 	}
 }
 
@@ -93,27 +94,27 @@ func TestSchemaInitAndInsert(t *testing.T) {
 	rec.mu.Lock()
 	ddl := strings.Join(rec.ddl, "\n")
 	rec.mu.Unlock()
-	for _, want := range []string{"CREATE DATABASE IF NOT EXISTS kapkan", "attack_events", "traffic", "TTL", "INTERVAL 7 DAY"} {
+	for _, want := range []string{"CREATE DATABASE IF NOT EXISTS kapkan", "attack_history", "ReplacingMergeTree(version)", "traffic", "TTL", "INTERVAL 7 DAY"} {
 		if !strings.Contains(ddl, want) {
 			t.Errorf("schema DDL missing %q:\n%s", want, ddl)
 		}
 	}
 
-	w.WriteAttack(sampleAttack())
+	w.WriteAttackHistory(sampleAttack())
 	w.WriteTraffic([]TrafficRow{{TS: "2026-06-13 12:00:00", Scope: "host", Key: "203.0.113.20", PPS: 1000}})
 
 	// Wait for the flush interval to fire.
-	waitFor(t, func() bool { return len(rec.inserts("attack_events")) == 1 && len(rec.inserts("traffic")) == 1 })
+	waitFor(t, func() bool { return len(rec.inserts("attack_history")) == 1 && len(rec.inserts("traffic")) == 1 })
 
-	got := rec.inserts("attack_events")[0]
-	for _, want := range []string{`"target":"203.0.113.20"`, `"attack_type":"ntp_amplification"`, `"dry_run":1`} {
+	got := rec.inserts("attack_history")[0]
+	for _, want := range []string{`"attack_id":"attack-1"`, `"version":1`, `"target":"203.0.113.20"`, `"attack_type":"ntp_amplification"`, `"dry_run":1`} {
 		if !strings.Contains(got, want) {
 			t.Errorf("attack row missing %q: %s", want, got)
 		}
 	}
 	// JSONEachRow framing: every emitted line must be a standalone valid
 	// JSON object (one object per line, newline-delimited).
-	for _, table := range []string{"attack_events", "traffic"} {
+	for _, table := range []string{"attack_history", "traffic"} {
 		for _, line := range rec.inserts(table) {
 			var obj map[string]any
 			if err := json.Unmarshal([]byte(line), &obj); err != nil {
@@ -183,9 +184,9 @@ func TestBatchSizeFlush(t *testing.T) {
 	defer func() { cancel(); w.Stop() }()
 
 	for i := 0; i < 5; i++ {
-		w.WriteAttack(sampleAttack())
+		w.WriteAttackHistory(sampleAttack())
 	}
-	waitFor(t, func() bool { return len(rec.inserts("attack_events")) == 5 })
+	waitFor(t, func() bool { return len(rec.inserts("attack_history")) == 5 })
 }
 
 func TestDropOnFullQueue(t *testing.T) {
@@ -197,23 +198,23 @@ func TestDropOnFullQueue(t *testing.T) {
 	cfg.BatchSize = 2
 
 	w := NewWriter(cfg, discardLogger()).(*ClickHouse)
-	before := testutil.ToFloat64(metrics.StorageRowsTotal.WithLabelValues("attack_events", "dropped"))
+	before := testutil.ToFloat64(metrics.StorageRowsTotal.WithLabelValues("attack_history", "dropped"))
 	// Do NOT Start: the queue never drains, so writes past QueueSize drop
 	// instead of blocking — the property that protects detection.
 	done := make(chan struct{})
 	go func() {
 		for i := 0; i < 1000; i++ {
-			w.WriteAttack(sampleAttack())
+			w.WriteAttackHistory(sampleAttack())
 		}
 		close(done)
 	}()
 	select {
 	case <-done:
 	case <-time.After(2 * time.Second):
-		t.Fatal("WriteAttack blocked on a full queue; storage must never block the caller")
+		t.Fatal("WriteAttackHistory blocked on a full queue; storage must never block the caller")
 	}
 	// 1000 writes, queue capacity 2: the overflow must be counted as dropped.
-	dropped := testutil.ToFloat64(metrics.StorageRowsTotal.WithLabelValues("attack_events", "dropped")) - before
+	dropped := testutil.ToFloat64(metrics.StorageRowsTotal.WithLabelValues("attack_history", "dropped")) - before
 	if dropped < 900 {
 		t.Errorf("dropped counter rose by %v, want ~998 (1000 writes, queue 2)", dropped)
 	}
@@ -228,12 +229,12 @@ func TestFlushOnShutdown(t *testing.T) {
 	w := NewWriter(cfg, discardLogger())
 	ctx, cancel := context.WithCancel(context.Background())
 	w.Start(ctx)
-	w.WriteAttack(sampleAttack())
-	w.WriteAttack(sampleAttack())
+	w.WriteAttackHistory(sampleAttack())
+	w.WriteAttackHistory(sampleAttack())
 
 	cancel() // triggers drain + flushFinal
 	w.Stop()
-	if got := len(rec.inserts("attack_events")); got != 2 {
+	if got := len(rec.inserts("attack_history")); got != 2 {
 		t.Errorf("rows flushed on shutdown = %d, want 2", got)
 	}
 }
@@ -248,7 +249,7 @@ func TestInsertErrorDoesNotBlock(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	w.Start(ctx)
 	for i := 0; i < 10; i++ {
-		w.WriteAttack(sampleAttack())
+		w.WriteAttackHistory(sampleAttack())
 	}
 	// A failing ClickHouse must not wedge the writer; shutdown still returns.
 	done := make(chan struct{})
@@ -266,7 +267,7 @@ func TestDisabledIsNoop(t *testing.T) {
 		t.Fatalf("disabled storage = %T, want noop", w)
 	}
 	// No-op methods must be safe to call without Start.
-	w.WriteAttack(sampleAttack())
+	w.WriteAttackHistory(sampleAttack())
 	w.WriteTraffic([]TrafficRow{{}})
 	w.Start(context.Background())
 	w.Stop()

@@ -150,18 +150,18 @@ func TestEnsureSchemaAttemptsEverything(t *testing.T) {
 		if got := rec.count("CREATE TABLE IF NOT EXISTS kapkan.edge_"); got != 3 {
 			t.Fatalf("edge CREATEs attempted = %d, want 3", got)
 		}
-		if got := rec.count("ALTER TABLE kapkan.attack_events ADD COLUMN IF NOT EXISTS"); got != 4 {
-			t.Fatalf("ALTERs attempted = %d, want 4", got)
+		if got := rec.count("ALTER TABLE"); got != 0 {
+			t.Fatalf("ALTERs attempted = %d, want 0", got)
 		}
 		rec.mu.Lock()
 		last := rec.stmts[len(rec.stmts)-1]
 		rec.mu.Unlock()
-		if !strings.HasPrefix(last, "ALTER") {
-			t.Fatalf("the upgrades must run after the edge tables; last statement: %s", last)
+		if !strings.HasPrefix(last, "CREATE TABLE") {
+			t.Fatalf("the edge DDL must run after the core tables; last statement: %s", last)
 		}
 	})
 	t.Run("core refused", func(t *testing.T) {
-		rec := &ddlRecorder{refuse: func(s string) bool { return strings.Contains(s, "kapkan.attack_events (") }}
+		rec := &ddlRecorder{refuse: func(s string) bool { return strings.Contains(s, "kapkan.attack_history (") }}
 		srv, cfg := rec.server(t)
 		defer srv.Close()
 		w := NewWriter(cfg, discardLogger()).(*ClickHouse)
@@ -172,8 +172,8 @@ func TestEnsureSchemaAttemptsEverything(t *testing.T) {
 		if got := rec.count("CREATE TABLE IF NOT EXISTS kapkan."); got != 6 {
 			t.Fatalf("CREATE TABLEs attempted = %d, want all 6", got)
 		}
-		if got := rec.count("ALTER TABLE"); got != 4 {
-			t.Fatalf("ALTERs attempted after a refused core CREATE = %d, want 4", got)
+		if got := rec.count("ALTER TABLE"); got != 0 {
+			t.Fatalf("ALTERs attempted after a refused core CREATE = %d, want 0", got)
 		}
 	})
 }

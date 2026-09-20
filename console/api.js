@@ -225,9 +225,11 @@
 
   function mapAttack(a, groups, bansRaw) {
     var d = deriveEscalation(a, groups, bansRaw);
+    var peak = a.peak_rates || {};
+    var metricPeak = peak[a.metric];
     var out = {
       scope: a.scope, target: a.target, group: a.group, direction: a.direction,
-      metric: a.metric, rate: a.rate, threshold: a.threshold, rates: a.rates || {},
+      metric: a.metric, rate: a.rate, threshold: a.threshold, rates: a.rates || {}, peak_rates: peak,
       active: !!a.active, ban_state: a.ban_state, method: a.method, route: a.route,
       flowspec: a.flowspec ? mapFlowspec(a.flowspec) : null,
       /* measured in-kernel drops; null for every attack with no XDP rules.
@@ -238,9 +240,7 @@
       classification: a.classification || { type: "mixed", confidence: 0 },
       reason: a.reason || null,
       escalation: d.escalation, escalation_step: d.step,
-      /* recent table reads peak_rate; the API exposes the last measurement
-         (rate), not a stored peak — surface it until /api/v1/traffic lands. */
-      peak_rate: a.rate
+      peak_rate: metricPeak == null ? a.rate : metricPeak
     };
     /* For a live attack with a current ban, prefer the ban's current rung
        artifacts so the mitigation panel tracks escalation in real time. */

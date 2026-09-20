@@ -19,6 +19,33 @@ security-relevant.
 
 ## [Unreleased]
 
+### Config changes
+
+- **Added** `api.docs_url` (optional): URL documentation exposed in status and used by
+  the operator console. Absent by default.
+- **Added** `sampling.upstream_capacity_pools` (optional): named ingress/egress capacity
+  pools whose members are `(exporter, ifindex)` interfaces. The console can show pool
+  utilization instead of only the share of observed traffic.
+
+### Added
+
+- Durable, complete attack history in ClickHouse. `attack_history` stores one versioned
+  lifecycle record per attack: detection sample, classification, reason, mitigation data,
+  final rates and peak rates. It uses `ReplacingMergeTree(version)`; the `active` version
+  is written at detection and the `ended` version on completion.
+- Recent attacks now survive a kapkan restart. The API restores completed records from
+  `attack_history`, including their detail drawer evidence. New installs create the table
+  automatically; an existing ClickHouse writer needs `CREATE` once for this new table.
+- Upstream capacity pools and an Overview switch between aggregate traffic share and
+  configured bandwidth utilization.
+- Operator-console documentation link sourced from `api.docs_url`.
+
+### Fixed
+
+- The console's Peak rate now uses the persisted peak for the triggered metric rather
+  than an attack's final measurement, so it remains identical before and after restart.
+- Console timestamps use a 24-hour clock consistently.
+
 ## [1.8.0] - 2026-09-18
 
 ### Config changes

@@ -28,11 +28,11 @@ type histWriter struct {
 	events  []storage.EdgeEventRow
 }
 
-func (h *histWriter) WriteAttack(storage.AttackRow)     {}
-func (h *histWriter) WriteTraffic([]storage.TrafficRow) {}
-func (h *histWriter) WriteAudit(storage.AuditRow)       {}
-func (h *histWriter) Start(context.Context)             {}
-func (h *histWriter) Stop()                             {}
+func (h *histWriter) WriteAttackHistory(storage.AttackHistoryRow) {}
+func (h *histWriter) WriteTraffic([]storage.TrafficRow)           {}
+func (h *histWriter) WriteAudit(storage.AuditRow)                 {}
+func (h *histWriter) Start(context.Context)                       {}
+func (h *histWriter) Stop()                                       {}
 func (h *histWriter) WriteEdgeWindows(r []storage.EdgeWindowRow) {
 	h.mu.Lock()
 	defer h.mu.Unlock()

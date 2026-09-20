@@ -29,7 +29,7 @@ import (
 // Writer persists rows. The no-op implementation is used when storage is
 // disabled, so callers never need a nil check.
 type Writer interface {
-	WriteAttack(AttackRow)
+	WriteAttackHistory(AttackHistoryRow)
 	WriteTraffic([]TrafficRow)
 	WriteAudit(AuditRow)
 	// The edge history (E6.4, edge_rows.go).
@@ -44,6 +44,7 @@ type Writer interface {
 // the audit trail and the edge history. It is nil when storage is disabled
 // (the API then reports history as unavailable rather than failing).
 type Querier interface {
+	QueryRecentAttacks(ctx context.Context, limit int) ([]AttackHistoryRow, error)
 	QueryTraffic(ctx context.Context, key string, from, to time.Time, stepSec int) ([]TrafficPoint, error)
 	QueryAudit(ctx context.Context, f AuditFilter) ([]AuditRow, error)
 	// The edge history (E6.4, edge_rows.go).
@@ -74,23 +75,33 @@ type TrafficPoint struct {
 	BaselinePPS float64 `json:"baseline_pps"`
 }
 
-// AttackRow is one attack lifecycle event persisted to the attack_events
-// table. JSON field names are the ClickHouse column names (JSONEachRow).
-type AttackRow struct {
-	EventTime  string  `json:"event_time"` // "2006-01-02 15:04:05" UTC
-	Kind       string  `json:"kind"`       // attack_started | attack_ended
-	Scope      string  `json:"scope"`
-	Target     string  `json:"target"`
-	Group      string  `json:"group"`
-	Direction  string  `json:"direction"`
-	AttackType string  `json:"attack_type"`
-	Metric     string  `json:"metric"`
-	Rate       float64 `json:"rate"`
-	Threshold  float64 `json:"threshold"`
-	PPS        float64 `json:"pps"`
-	Mbps       float64 `json:"mbps"`
-	FlowsPS    float64 `json:"flows_per_sec"`
-	BanState   string  `json:"ban_state"`
+// AttackHistoryRow is the complete versioned snapshot of one attack. Complex
+// evidence remains JSON to preserve it losslessly while stable dimensions stay
+// queryable ClickHouse columns.
+type AttackHistoryRow struct {
+	AttackID    string  `json:"attack_id"`
+	Version     uint64  `json:"version"`
+	Status      string  `json:"status"` // active | ended
+	StartedAt   string  `json:"started_at"`
+	EndedAt     *string `json:"ended_at"`
+	UpdatedAt   string  `json:"updated_at"`
+	Scope       string  `json:"scope"`
+	Target      string  `json:"target"`
+	Group       string  `json:"group"`
+	Direction   string  `json:"direction"`
+	AttackType  string  `json:"attack_type"`
+	Metric      string  `json:"metric"`
+	Rate        float64 `json:"rate"`
+	Threshold   float64 `json:"threshold"`
+	PPS         float64 `json:"pps"`
+	Mbps        float64 `json:"mbps"`
+	FlowsPS     float64 `json:"flows_per_sec"`
+	PeakPPS     float64 `json:"peak_pps"`
+	PeakMbps    float64 `json:"peak_mbps"`
+	PeakFlowsPS float64 `json:"peak_flows_per_sec"`
+	Rates       string  `json:"rates"`
+	PeakRates   string  `json:"peak_rates"`
+	BanState    string  `json:"ban_state"`
 	// Method is the mitigation method applied to this attack — "blackhole",
 	// "flowspec", "divert", "dataplane", or "" for an alert-only stage.
 	//
@@ -100,12 +111,14 @@ type AttackRow struct {
 	// by the previous release — silently dropping the attack history for exactly
 	// the deployments running the newest mitigation. LowCardinality is a storage
 	// encoding, not a constraint; unknown values cost nothing and insert fine.
-	Method     string `json:"method"`
-	DryRun     uint8  `json:"dry_run"`
-	TopSources string `json:"top_sources"`   // comma-joined for quick reading
-	TopASNs    string `json:"top_asns"`      // pipe-joined "AS<n> <org>" (orgs may contain commas); empty when geoip off
-	Upstreams  string `json:"top_upstreams"` // JSON array of sampling-corrected upstream counters
-	Reason     string `json:"reason"`        // compact JSON of the detection Reason (why it fired); empty on attack_ended
+	Method         string `json:"method"`
+	DryRun         uint8  `json:"dry_run"`
+	Route          string `json:"route"`
+	Sample         string `json:"sample"`
+	Classification string `json:"classification"`
+	Reason         string `json:"reason"`
+	FlowSpec       string `json:"flowspec"`
+	Dataplane      string `json:"dataplane"`
 }
 
 // AuditRow is one operator-attributed mutation persisted to the audit_events
@@ -142,16 +155,17 @@ type TrafficRow struct {
 
 // table names (validated-charset database is from config).
 const (
-	tableAttacks = "attack_events"
-	tableTraffic = "traffic"
-	tableAudit   = "audit_events"
+	tableAttackHistory = "attack_history"
+	tableTraffic       = "traffic"
+	tableAudit         = "audit_events"
 	// chDateTime is ClickHouse's DateTime literal layout (UTC).
 	chDateTime = "2006-01-02 15:04:05"
 	// maxTrafficRows caps the read endpoint's result (SQL LIMIT + server-side
 	// max_result_rows) so a wide range / tiny step can't return a huge payload.
 	maxTrafficRows = 5001
 	// maxAuditRows caps the audit read endpoint's result the same way.
-	maxAuditRows = 1001
+	maxAuditRows         = 1001
+	maxAttackHistoryRows = 100
 )
 
 // pending is a marshaled row tagged with its destination table.
@@ -231,10 +245,10 @@ func (c *ClickHouse) Start(ctx context.Context) {
 // Stop drains and flushes the queue, then waits for the flush loop to exit.
 func (c *ClickHouse) Stop() { c.wg.Wait() }
 
-// WriteAttack enqueues one attack event. Non-blocking: a full queue drops
-// the row and increments a metric rather than stalling the caller.
-func (c *ClickHouse) WriteAttack(r AttackRow) {
-	c.enqueue(tableAttacks, r)
+// WriteAttackHistory enqueues one complete attack snapshot. Non-blocking: a
+// full queue drops the row rather than stalling the detector.
+func (c *ClickHouse) WriteAttackHistory(r AttackHistoryRow) {
+	c.enqueue(tableAttackHistory, r)
 }
 
 // WriteAudit enqueues one audit event. Non-blocking, like WriteAttack.
@@ -358,14 +372,17 @@ func (c *ClickHouse) ensureSchema(ctx context.Context) error {
 		// `group` and `key` are backtick-quoted: they are soft keywords in
 		// ClickHouse and quoting keeps the DDL valid across versions.
 		fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s.%s ("+
-			"event_time DateTime, kind LowCardinality(String), scope LowCardinality(String), "+
+			"attack_id String, version UInt64, status LowCardinality(String), "+
+			"started_at DateTime, ended_at Nullable(DateTime), updated_at DateTime, scope LowCardinality(String), "+
 			"target String, `group` String, direction LowCardinality(String), "+
 			"attack_type LowCardinality(String), metric LowCardinality(String), "+
 			"rate Float64, threshold Float64, pps Float64, mbps Float64, flows_per_sec Float64, "+
-			"ban_state LowCardinality(String), method LowCardinality(String), dry_run UInt8, "+
-			"top_sources String, top_asns String, top_upstreams String, reason String"+
-			") ENGINE = MergeTree() ORDER BY (event_time, target) "+
-			"TTL event_time + INTERVAL %d DAY", c.cfg.Database, tableAttacks, c.cfg.TTLDays),
+			"peak_pps Float64, peak_mbps Float64, peak_flows_per_sec Float64, "+
+			"rates String, peak_rates String, "+
+			"ban_state LowCardinality(String), method LowCardinality(String), dry_run UInt8, route String, "+
+			"sample String, classification String, reason String, flowspec String, dataplane String"+
+			") ENGINE = ReplacingMergeTree(version) ORDER BY attack_id "+
+			"TTL started_at + INTERVAL %d DAY", c.cfg.Database, tableAttackHistory, c.cfg.TTLDays),
 		fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s.%s ("+
 			"ts DateTime, scope LowCardinality(String), `key` String, `group` String, "+
 			"pps Float64, mbps Float64, flows_per_sec Float64, in_attack UInt8, baseline_pps Float64"+
@@ -432,9 +449,7 @@ func ddlHead(s string) string {
 var schemaUpgrades = []struct {
 	table string
 	cols  []string
-}{
-	{tableAttacks, []string{"top_asns String", "top_upstreams String", "reason String", "method LowCardinality(String)"}},
-}
+}{}
 
 // post sends one request to ClickHouse and treats non-2xx as an error,
 // quoting the (bounded) response body so DDL/insert failures are diagnosable.
@@ -507,6 +522,38 @@ func (c *ClickHouse) QueryTraffic(ctx context.Context, key string, from, to time
 			return nil, fmt.Errorf("decode traffic row: %w", err)
 		}
 		out = append(out, p)
+	}
+	return out, nil
+}
+
+// QueryRecentAttacks returns the latest completed attack snapshots. FINAL is
+// required because ReplacingMergeTree compacts versions asynchronously.
+func (c *ClickHouse) QueryRecentAttacks(ctx context.Context, limit int) ([]AttackHistoryRow, error) {
+	if limit < 1 || limit > maxAttackHistoryRows {
+		limit = maxAttackHistoryRows
+	}
+	sql := fmt.Sprintf("SELECT attack_id, version, status, started_at, ended_at, updated_at, scope, target, `group`, direction, "+
+		"attack_type, metric, rate, threshold, pps, mbps, flows_per_sec, peak_pps, peak_mbps, peak_flows_per_sec, "+
+		"rates, peak_rates, ban_state, method, dry_run, route, sample, classification, reason, flowspec, dataplane "+
+		"FROM %s.%s FINAL WHERE status = 'ended' ORDER BY ended_at DESC LIMIT %d FORMAT JSONEachRow",
+		c.cfg.Database, tableAttackHistory, limit)
+	params := url.Values{}
+	params.Set("readonly", "2")
+	params.Set("max_execution_time", "10")
+	params.Set("max_result_rows", fmt.Sprintf("%d", limit))
+	params.Set("result_overflow_mode", "throw")
+	body, err := c.queryRaw(ctx, sql, params)
+	if err != nil {
+		return nil, err
+	}
+	var out []AttackHistoryRow
+	dec := json.NewDecoder(bytes.NewReader(body))
+	for dec.More() {
+		var row AttackHistoryRow
+		if err := dec.Decode(&row); err != nil {
+			return nil, fmt.Errorf("decode attack history row: %w", err)
+		}
+		out = append(out, row)
 	}
 	return out, nil
 }
@@ -586,8 +633,8 @@ func (c *ClickHouse) queryRaw(ctx context.Context, sql string, params url.Values
 // noop is the disabled-storage Writer.
 type noop struct{}
 
-func (noop) WriteAttack(AttackRow)     {}
-func (noop) WriteTraffic([]TrafficRow) {}
-func (noop) WriteAudit(AuditRow)       {}
-func (noop) Start(context.Context)     {}
-func (noop) Stop()                     {}
+func (noop) WriteAttackHistory(AttackHistoryRow) {}
+func (noop) WriteTraffic([]TrafficRow)           {}
+func (noop) WriteAudit(AuditRow)                 {}
+func (noop) Start(context.Context)               {}
+func (noop) Stop()                               {}

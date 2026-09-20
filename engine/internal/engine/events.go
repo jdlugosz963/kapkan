@@ -145,6 +145,8 @@ func (k EventKind) String() string {
 // declared over.
 type Event struct {
 	Kind EventKind `json:"kind"`
+	// AttackID identifies one lifecycle from its start through its end.
+	AttackID string `json:"attack_id"`
 	// Scope says what is under attack: a single host (Target) or a
 	// hostgroup's total traffic (Group). Target is invalid for ScopeGroup.
 	Scope  Scope      `json:"scope"`
@@ -168,6 +170,7 @@ type Event struct {
 	Rate       float64   `json:"rate"`
 	Threshold  float64   `json:"threshold"`
 	Rates      Rates     `json:"rates"`
+	PeakRates  Rates     `json:"peak_rates"`
 	At         time.Time `json:"at"`
 	// StartedAt is set on AttackEnded so consumers can compute duration.
 	StartedAt time.Time `json:"started_at"`

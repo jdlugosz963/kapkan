@@ -16,11 +16,14 @@ package engine
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"log/slog"
 	"net/netip"
 	"sort"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/kapkan-io/kapkan/internal/config"
@@ -109,6 +112,7 @@ type upstreamCounter struct {
 // truthful even if a reload changed the thresholds mid-attack.
 type attackState struct {
 	inAttack  bool
+	attackID  string
 	metric    Metric
 	threshold float64
 	// effThresholds is the full effective threshold set frozen at attack
@@ -118,7 +122,61 @@ type attackState struct {
 	// the learned thresholds when warm-up elapses mid-attack.
 	effThresholds config.Thresholds
 	startedAt     time.Time
+	peakRates     Rates
 	belowSince    time.Time // zero while currently above any threshold
+}
+
+var attackIDSequence atomic.Uint64
+
+func newAttackID(now time.Time) string {
+	var value [16]byte
+	if _, err := rand.Read(value[:]); err == nil {
+		return hex.EncodeToString(value[:])
+	}
+	return strconv.FormatInt(now.UnixNano(), 36) + "-" + strconv.FormatUint(attackIDSequence.Add(1), 36)
+}
+
+func peakRates(current, sample Rates) Rates {
+	if sample.PPS > current.PPS {
+		current.PPS = sample.PPS
+	}
+	if sample.Mbps > current.Mbps {
+		current.Mbps = sample.Mbps
+	}
+	if sample.FlowsPerSec > current.FlowsPerSec {
+		current.FlowsPerSec = sample.FlowsPerSec
+	}
+	if sample.TCPPPS > current.TCPPPS {
+		current.TCPPPS = sample.TCPPPS
+	}
+	if sample.TCPMbps > current.TCPMbps {
+		current.TCPMbps = sample.TCPMbps
+	}
+	if sample.UDPPPS > current.UDPPPS {
+		current.UDPPPS = sample.UDPPPS
+	}
+	if sample.UDPMbps > current.UDPMbps {
+		current.UDPMbps = sample.UDPMbps
+	}
+	if sample.ICMPPPS > current.ICMPPPS {
+		current.ICMPPPS = sample.ICMPPPS
+	}
+	if sample.ICMPMbps > current.ICMPMbps {
+		current.ICMPMbps = sample.ICMPMbps
+	}
+	if sample.TCPSYNPPS > current.TCPSYNPPS {
+		current.TCPSYNPPS = sample.TCPSYNPPS
+	}
+	if sample.TCPSYNMbps > current.TCPSYNMbps {
+		current.TCPSYNMbps = sample.TCPSYNMbps
+	}
+	if sample.FragPPS > current.FragPPS {
+		current.FragPPS = sample.FragPPS
+	}
+	if sample.FragMbps > current.FragMbps {
+		current.FragMbps = sample.FragMbps
+	}
+	return current
 }
 
 // hostState tracks the rolling counters, per-direction attack lifecycle and
@@ -637,6 +695,8 @@ func (e *Engine) evalTick(now time.Time) {
 						st.threshold = threshold
 						st.effThresholds = eff
 						st.startedAt = now
+						st.attackID = newAttackID(now)
+						st.peakRates = rates[d]
 						metrics.AttacksTotal.Inc()
 						sample := e.collectHostSample(sh, addr, d, nowSec-e.windowSec)
 						cls := classify(rates[d], sample)
@@ -649,6 +709,7 @@ func (e *Engine) evalTick(now time.Time) {
 							"flows_per_sec", rates[d].FlowsPerSec)
 						e.emit(Event{
 							Kind:           AttackStarted,
+							AttackID:       st.attackID,
 							Scope:          ScopeHost,
 							Target:         addr,
 							Group:          g.Name,
@@ -658,12 +719,14 @@ func (e *Engine) evalTick(now time.Time) {
 							Rate:           rate,
 							Threshold:      threshold,
 							Rates:          rates[d],
+							PeakRates:      st.peakRates,
 							At:             now,
 							Sample:         sample,
 							Classification: cls,
 							Reason:         buildReason(metric, rates[d], *th, &hs.baselines[d], g.Baseline, nowSec),
 						})
 					} else {
+						st.peakRates = peakRates(st.peakRates, rates[d])
 						// Attack still active after its start: re-report so mitigation
 						// refreshes the ban's TTL and the route is not withdrawn out from
 						// under a sustained attack that outlives ban.ttl_seconds.
@@ -823,6 +886,8 @@ func (e *Engine) evalGroups(cfg *config.Config, totals [][2]Rates, hysteresis ti
 					st.threshold = threshold
 					st.effThresholds = eff
 					st.startedAt = now
+					st.attackID = newAttackID(now)
+					st.peakRates = totals[gi][d]
 					metrics.AttacksTotal.Inc()
 					// evalGroups runs outside all shard locks, which
 					// collectGroupSample requires.
@@ -837,6 +902,7 @@ func (e *Engine) evalGroups(cfg *config.Config, totals [][2]Rates, hysteresis ti
 						"flows_per_sec", totals[gi][d].FlowsPerSec)
 					e.emit(Event{
 						Kind:           AttackStarted,
+						AttackID:       st.attackID,
 						Scope:          ScopeGroup,
 						Group:          g.Name,
 						Direction:      dirName(d),
@@ -844,11 +910,14 @@ func (e *Engine) evalGroups(cfg *config.Config, totals [][2]Rates, hysteresis ti
 						Rate:           rate,
 						Threshold:      threshold,
 						Rates:          totals[gi][d],
+						PeakRates:      st.peakRates,
 						At:             now,
 						Sample:         sample,
 						Classification: cls,
 						Reason:         buildReason(metric, totals[gi][d], *th, &gs.baselines[d], g.Baseline, now.Unix()),
 					})
+				} else {
+					st.peakRates = peakRates(st.peakRates, totals[gi][d])
 				}
 				st.belowSince = time.Time{}
 				active++
@@ -896,6 +965,7 @@ func (e *Engine) evalGroups(cfg *config.Config, totals [][2]Rates, hysteresis ti
 // lock.
 func (e *Engine) endAttack(addr netip.Addr, hs *hostState, dir int, rates Rates, g *config.Group, now time.Time, reason string) {
 	st := &hs.attacks[dir]
+	st.peakRates = peakRates(st.peakRates, rates)
 	st.inAttack = false
 	st.belowSince = time.Time{}
 	e.log.Info("attack ended",
@@ -905,6 +975,7 @@ func (e *Engine) endAttack(addr netip.Addr, hs *hostState, dir int, rates Rates,
 		"pps", rates.PPS, "mbps", rates.Mbps, "flows_per_sec", rates.FlowsPerSec)
 	e.emit(Event{
 		Kind:       AttackEnded,
+		AttackID:   st.attackID,
 		Scope:      ScopeHost,
 		Target:     addr,
 		Group:      g.Name,
@@ -914,6 +985,7 @@ func (e *Engine) endAttack(addr netip.Addr, hs *hostState, dir int, rates Rates,
 		Rate:       rateFor(rates, st.metric),
 		Threshold:  st.threshold,
 		Rates:      rates,
+		PeakRates:  st.peakRates,
 		At:         now,
 		StartedAt:  st.startedAt,
 	})
@@ -923,6 +995,7 @@ func (e *Engine) endAttack(addr netip.Addr, hs *hostState, dir int, rates Rates,
 // AttackEnded.
 func (e *Engine) endGroupAttack(name string, gs *groupState, dir int, rates Rates, now time.Time, reason string) {
 	st := &gs.attacks[dir]
+	st.peakRates = peakRates(st.peakRates, rates)
 	st.inAttack = false
 	st.belowSince = time.Time{}
 	e.log.Info("group attack ended",
@@ -932,6 +1005,7 @@ func (e *Engine) endGroupAttack(name string, gs *groupState, dir int, rates Rate
 		"pps", rates.PPS, "mbps", rates.Mbps, "flows_per_sec", rates.FlowsPerSec)
 	e.emit(Event{
 		Kind:      AttackEnded,
+		AttackID:  st.attackID,
 		Scope:     ScopeGroup,
 		Group:     name,
 		Direction: dirName(dir),
@@ -939,6 +1013,7 @@ func (e *Engine) endGroupAttack(name string, gs *groupState, dir int, rates Rate
 		Rate:      rateFor(rates, st.metric),
 		Threshold: st.threshold,
 		Rates:     rates,
+		PeakRates: st.peakRates,
 		At:        now,
 		StartedAt: st.startedAt,
 	})
@@ -978,6 +1053,8 @@ func (e *Engine) evalCarpets(cfg *config.Config, agg map[netip.Prefix]*carpetAcc
 				st.threshold = threshold
 				st.effThresholds = th
 				st.startedAt = now
+				st.attackID = newAttackID(now)
+				st.peakRates = acc.rates
 				metrics.AttacksTotal.Inc()
 				sample := e.collectPrefixSample(prefix, dirIn, now.Unix()-e.windowSec)
 				cls := classify(acc.rates, sample)
@@ -989,6 +1066,7 @@ func (e *Engine) evalCarpets(cfg *config.Config, agg map[netip.Prefix]*carpetAcc
 					"flows_per_sec", acc.rates.FlowsPerSec)
 				e.emit(Event{
 					Kind:           AttackStarted,
+					AttackID:       st.attackID,
 					Scope:          ScopePrefix,
 					Target:         prefix.Addr(),
 					Prefix:         prefix.String(),
@@ -1000,12 +1078,14 @@ func (e *Engine) evalCarpets(cfg *config.Config, agg map[netip.Prefix]*carpetAcc
 					Rate:           rate,
 					Threshold:      threshold,
 					Rates:          acc.rates,
+					PeakRates:      st.peakRates,
 					At:             now,
 					Sample:         sample,
 					Classification: cls,
 					Reason:         buildReason(metric, acc.rates, th, nil, nil, now.Unix()),
 				})
 			} else {
+				st.peakRates = peakRates(st.peakRates, acc.rates)
 				// Sustained carpet attack: re-report so mitigation refreshes the
 				// prefix ban's TTL (same rationale as the per-host AttackOngoing).
 				e.emitCarpetOngoing(cfg, prefix, now)
@@ -1052,6 +1132,7 @@ func (e *Engine) evalCarpets(cfg *config.Config, agg map[netip.Prefix]*carpetAcc
 // prefix from the carpet table (carpet state is ephemeral, unlike groups).
 func (e *Engine) endCarpet(prefix netip.Prefix, cs *carpetState, rates Rates, now time.Time, reason string) {
 	st := &cs.attack
+	st.peakRates = peakRates(st.peakRates, rates)
 	st.inAttack = false
 	st.belowSince = time.Time{}
 	e.log.Info("carpet-bomb attack ended",
@@ -1060,6 +1141,7 @@ func (e *Engine) endCarpet(prefix netip.Prefix, cs *carpetState, rates Rates, no
 		"pps", rates.PPS, "mbps", rates.Mbps, "flows_per_sec", rates.FlowsPerSec)
 	e.emit(Event{
 		Kind:      AttackEnded,
+		AttackID:  st.attackID,
 		Scope:     ScopePrefix,
 		Target:    prefix.Addr(),
 		Prefix:    prefix.String(),
@@ -1070,6 +1152,7 @@ func (e *Engine) endCarpet(prefix netip.Prefix, cs *carpetState, rates Rates, no
 		Rate:      rateFor(rates, st.metric),
 		Threshold: st.threshold,
 		Rates:     rates,
+		PeakRates: st.peakRates,
 		At:        now,
 		StartedAt: st.startedAt,
 	})

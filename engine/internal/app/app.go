@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"strings"
 	"sync"
 	"time"
 
@@ -54,18 +53,19 @@ type App struct {
 	// fpReader drains the fingerprint copy ring and source-blocks JA4-blocklisted
 	// clients. nil unless dataplane.fingerprint.enabled. Closed before the
 	// data-plane maps it reads, so its Run goroutine joins cleanly at shutdown.
-	fpReader    *fpplane.Reader
-	log         *slog.Logger
-	cancel      context.CancelFunc
-	storeCancel context.CancelFunc
-	wg          sync.WaitGroup
-	apiErr      chan error
+	fpReader      *fpplane.Reader
+	log           *slog.Logger
+	cancel        context.CancelFunc
+	storeCancel   context.CancelFunc
+	attackHistory map[string]storage.AttackHistoryRow
+	wg            sync.WaitGroup
+	apiErr        chan error
 }
 
 // New builds all components from the configuration store. It does not bind
 // sockets or start goroutines; call Start for that.
 func New(store *config.Store, log *slog.Logger) (*App, error) {
-	a := &App{Store: store, log: log, apiErr: make(chan error, 1)}
+	a := &App{Store: store, log: log, apiErr: make(chan error, 1), attackHistory: make(map[string]storage.AttackHistoryRow)}
 	cfg := store.Get()
 
 	// The XDP data plane, when configured. Started before the mitigator and the
@@ -395,12 +395,20 @@ func (a *App) consumeEvents(ctx context.Context) {
 				ban := a.Mitigate.OnAttackStarted(ev)
 				a.API.RecordAttackStarted(ev, ban)
 				a.Notify.NotifyAttackStarted(ctx, ev, ban)
-				a.Storage.WriteAttack(attackRow(ev, ban))
+				row := attackHistoryStarted(ev, ban)
+				a.attackHistory[ev.AttackID] = row
+				a.Storage.WriteAttackHistory(row)
 			case engine.AttackEnded:
 				ban := a.Mitigate.OnAttackEnded(ev)
 				a.API.RecordAttackEnded(ev, ban)
 				a.Notify.NotifyAttackEnded(ctx, ev, ban)
-				a.Storage.WriteAttack(attackRow(ev, ban))
+				row, ok := a.attackHistory[ev.AttackID]
+				if !ok {
+					a.log.Warn("attack ended without an in-process history snapshot; preserving active database record", "attack_id", ev.AttackID)
+					continue
+				}
+				delete(a.attackHistory, ev.AttackID)
+				a.Storage.WriteAttackHistory(attackHistoryEnded(row, ev, ban))
 			}
 		}
 	}
@@ -426,46 +434,37 @@ func (a *App) consumeOngoing(ctx context.Context) {
 // chTimeFormat is ClickHouse's DateTime literal layout (UTC).
 const chTimeFormat = "2006-01-02 15:04:05"
 
-// attackRow maps an engine event (and its resulting ban) to a storage row.
-func attackRow(ev engine.Event, ban *mitigate.Ban) storage.AttackRow {
-	r := storage.AttackRow{
-		EventTime: ev.At.UTC().Format(chTimeFormat),
-		Kind:      ev.Kind.String(),
-		Scope:     string(ev.Scope),
-		Group:     ev.Group,
-		Direction: string(ev.Direction),
-		Metric:    string(ev.Metric),
-		Rate:      ev.Rate,
-		Threshold: ev.Threshold,
-		PPS:       ev.Rates.PPS,
-		Mbps:      ev.Rates.Mbps,
-		FlowsPS:   ev.Rates.FlowsPerSec,
+func attackHistoryStarted(ev engine.Event, ban *mitigate.Ban) storage.AttackHistoryRow {
+	r := storage.AttackHistoryRow{
+		AttackID:    ev.AttackID,
+		Version:     1,
+		Status:      "active",
+		StartedAt:   ev.At.UTC().Format(chTimeFormat),
+		UpdatedAt:   ev.At.UTC().Format(chTimeFormat),
+		Scope:       string(ev.Scope),
+		Group:       ev.Group,
+		Direction:   string(ev.Direction),
+		Metric:      string(ev.Metric),
+		Rate:        ev.Rate,
+		Threshold:   ev.Threshold,
+		PPS:         ev.Rates.PPS,
+		Mbps:        ev.Rates.Mbps,
+		FlowsPS:     ev.Rates.FlowsPerSec,
+		PeakPPS:     ev.PeakRates.PPS,
+		PeakMbps:    ev.PeakRates.Mbps,
+		PeakFlowsPS: ev.PeakRates.FlowsPerSec,
+		Rates:       marshalHistoryJSON(ev.Rates),
+		PeakRates:   marshalHistoryJSON(ev.PeakRates),
 	}
 	if ev.Target.IsValid() {
 		r.Target = ev.Target.String()
 	}
 	if ev.Classification != nil {
 		r.AttackType = string(ev.Classification.Type)
+		r.Classification = marshalHistoryJSON(ev.Classification)
 	}
 	if ev.Sample != nil {
-		keys := make([]string, 0, len(ev.Sample.TopSources))
-		for _, c := range ev.Sample.TopSources {
-			keys = append(keys, c.Key)
-		}
-		r.TopSources = strings.Join(keys, ",")
-		asns := make([]string, 0, len(ev.Sample.TopASNs))
-		for _, c := range ev.Sample.TopASNs {
-			asns = append(asns, c.Key)
-		}
-		// Pipe-joined, not comma: AS org names routinely contain commas
-		// ("DigitalOcean, LLC"), which would make a comma-joined field
-		// ambiguous to split.
-		r.TopASNs = strings.Join(asns, " | ")
-		if len(ev.Sample.TopUpstreams) > 0 {
-			if data, err := json.Marshal(ev.Sample.TopUpstreams); err == nil {
-				r.Upstreams = string(data)
-			}
-		}
+		r.Sample = marshalHistoryJSON(ev.Sample)
 	}
 	if ban != nil {
 		r.BanState = string(ban.State)
@@ -473,16 +472,46 @@ func attackRow(ev engine.Event, ban *mitigate.Ban) storage.AttackRow {
 		// on when the event fired — including "dataplane". A report asking "which
 		// attacks did we drop in the kernel" has no other way to tell.
 		r.Method = string(ban.Method)
+		r.Route = ban.Route
+		r.FlowSpec = marshalHistoryJSON(ban.FlowSpec)
+		r.Dataplane = marshalHistoryJSON(ban.Dataplane)
 		if ban.DryRun {
 			r.DryRun = 1
 		}
 	}
 	if ev.Reason != nil {
-		if b, err := json.Marshal(ev.Reason); err == nil {
-			r.Reason = string(b)
+		r.Reason = marshalHistoryJSON(ev.Reason)
+	}
+	return r
+}
+
+func attackHistoryEnded(r storage.AttackHistoryRow, ev engine.Event, ban *mitigate.Ban) storage.AttackHistoryRow {
+	r.Version = 2
+	r.Status = "ended"
+	endedAt := ev.At.UTC().Format(chTimeFormat)
+	r.EndedAt = &endedAt
+	r.UpdatedAt = endedAt
+	r.Rate = ev.Rate
+	r.PPS, r.Mbps, r.FlowsPS = ev.Rates.PPS, ev.Rates.Mbps, ev.Rates.FlowsPerSec
+	r.PeakPPS, r.PeakMbps, r.PeakFlowsPS = ev.PeakRates.PPS, ev.PeakRates.Mbps, ev.PeakRates.FlowsPerSec
+	r.Rates, r.PeakRates = marshalHistoryJSON(ev.Rates), marshalHistoryJSON(ev.PeakRates)
+	if ban != nil {
+		r.BanState = string(ban.State)
+		r.Method, r.Route = string(ban.Method), ban.Route
+		r.FlowSpec, r.Dataplane = marshalHistoryJSON(ban.FlowSpec), marshalHistoryJSON(ban.Dataplane)
+		if ban.DryRun {
+			r.DryRun = 1
 		}
 	}
 	return r
+}
+
+func marshalHistoryJSON(value any) string {
+	b, err := json.Marshal(value)
+	if err != nil {
+		return ""
+	}
+	return string(b)
 }
 
 // persistTraffic snapshots per-host rates to storage on a fixed interval so

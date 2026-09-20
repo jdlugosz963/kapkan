@@ -18,7 +18,7 @@ import (
 // cancel right after the writes — six inserts failed.
 func TestFlushOnShutdownWithFullBatches(t *testing.T) {
 	counter := func(result string) float64 {
-		return testutil.ToFloat64(metrics.StorageRowsTotal.WithLabelValues("attack_events", result))
+		return testutil.ToFloat64(metrics.StorageRowsTotal.WithLabelValues("attack_history", result))
 	}
 	for attempt := 0; attempt < 20; attempt++ {
 		rec := newRecorder()
@@ -29,11 +29,11 @@ func TestFlushOnShutdownWithFullBatches(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		w.Start(ctx)
 		for i := 0; i < 7; i++ {
-			w.WriteAttack(sampleAttack())
+			w.WriteAttackHistory(sampleAttack())
 		}
 		cancel()
 		w.Stop()
-		got := len(rec.inserts("attack_events"))
+		got := len(rec.inserts("attack_history"))
 		srv.Close()
 		if got != 7 {
 			t.Fatalf("attempt %d: %d of 7 rows reached the server after a cancel with full batches pending (written +%v, dropped +%v, error +%v)",

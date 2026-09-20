@@ -13,11 +13,11 @@ import (
 // fakeAuditWriter records audit rows; every other Writer method is a no-op.
 type fakeAuditWriter struct{ rows []storage.AuditRow }
 
-func (f *fakeAuditWriter) WriteAttack(storage.AttackRow)     {}
-func (f *fakeAuditWriter) WriteTraffic([]storage.TrafficRow) {}
-func (f *fakeAuditWriter) WriteAudit(r storage.AuditRow)     { f.rows = append(f.rows, r) }
-func (f *fakeAuditWriter) Start(context.Context)             {}
-func (f *fakeAuditWriter) Stop()                             {}
+func (f *fakeAuditWriter) WriteAttackHistory(storage.AttackHistoryRow) {}
+func (f *fakeAuditWriter) WriteTraffic([]storage.TrafficRow)           {}
+func (f *fakeAuditWriter) WriteAudit(r storage.AuditRow)               { f.rows = append(f.rows, r) }
+func (f *fakeAuditWriter) Start(context.Context)                       {}
+func (f *fakeAuditWriter) Stop()                                       {}
 
 func (f *fakeAuditWriter) WriteEdgeWindows([]storage.EdgeWindowRow) {}
 func (f *fakeAuditWriter) WriteEdgeSources([]storage.EdgeSourceRow) {}

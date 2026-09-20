@@ -52,7 +52,7 @@ fails quietly. Two checks:
   or `result="error"`). See [Metrics](/docs/metrics).
 - Query ClickHouse directly:
   ```bash
-  curl 'http://127.0.0.1:8123/?query=SELECT%20count()%20FROM%20kapkan.attack_events'
+  curl 'http://127.0.0.1:8123/?query=SELECT%20count()%20FROM%20kapkan.attack_history%20FINAL'
   ```
 
 On a bad credential or permission problem the engine logs `clickhouse schema init failed`
@@ -64,11 +64,11 @@ counts stay at zero.
 Kapkan talks to ClickHouse's **HTTP interface** with the Go standard library — no driver
 dependency. The only external dependency is the ClickHouse server itself.
 
-On start it idempotently creates six MergeTree tables:
+On start it idempotently creates six tables:
 
 | Table | Contents |
 | --- | --- |
-| `attack_events` | Every attack start and end: type, direction, rates, the sample's top sources, ban state, and the detection `reason`. |
+| `attack_history` | One versioned record per attack, written at detection and completion. It retains the full sample, classification, reason, mitigation state, final rates and peak rates; `ReplacingMergeTree(version)` keeps the latest version. |
 | `traffic` | Periodic per-host rate and baseline snapshots (every `traffic_interval_seconds`). |
 | `audit_events` | Operator-attributed mutations: who issued each ban/unban/config-reload/edge lever, when, and the outcome. See [Audit log](/docs/audit). |
 | `edge_windows` | One row per [edge node](/docs/edge), zone and closed ten-second window: what the node saw and did — requests, verdicts, would-be counts, response statuses, HTTP/3 requests, the rung's state. See [Edge history](#edge-history). |
@@ -87,11 +87,10 @@ no longer `CREATE` keeps the tables it always had. If `edge history table not cr
 at start, run one start with a credential that may `CREATE`, or create the table yourself with
 the statement in `engine/internal/storage/edge_rows.go`.
 
-The `attack_events` table's `reason` column holds the compact JSON of the detection
-[reason](/docs/detection) — why the attack fired (threshold provenance,
-warm-up, protocol shares) — and is empty on the attack-ended row. Existing deployments gain the
-column automatically: schema init runs an `ADD COLUMN IF NOT EXISTS`, skipped silently if the
-writer credential lacks `ALTER` rights (fresh installs already have it).
+The `attack_history.reason` column holds the compact JSON of the detection
+[reason](/docs/detection) — why the attack fired (threshold provenance, warm-up and protocol
+shares). The full detection sample and classification are retained with it, so completed attacks
+remain inspectable after a process restart.
 
 ## Edge history
 
@@ -187,8 +186,8 @@ See [Metrics](/docs/metrics).
 
 The `traffic` table currently persists per-host snapshots only. When the optional `geoip`
 block is configured (a MaxMind `.mmdb` database), Kapkan resolves per-source ASNs and
-persists each attack's top ASNs in `attack_events.top_asns` (pipe-joined `"AS<n> <org>"`,
-empty when geoip is off). Per-ASN time-series and per-hostgroup totals are not yet
+persists each attack's complete sample, including its top ASNs, in `attack_history.sample`
+(empty when GeoIP is off). Per-ASN time-series and per-hostgroup totals are not yet
 snapshotted — both are candidates for a follow-up.
 
 ## Related

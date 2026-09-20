@@ -128,21 +128,14 @@ func TestRealClickHouse(t *testing.T) {
 			t.Fatalf("ensureSchema #%d: %v", i+1, err)
 		}
 	}
-	for _, table := range []string{tableAttacks, tableTraffic, tableAudit, tableEdgeWindows, tableEdgeSources, tableEdgeEvents} {
-		if out, err := chExec(base, fmt.Sprintf("SELECT engine FROM system.tables WHERE database = '%s' AND name = '%s' FORMAT TabSeparated", db, table)); err != nil || out != "MergeTree" {
-			t.Fatalf("table %s: engine %q err %v, want MergeTree", table, out, err)
+	for _, table := range []string{tableAttackHistory, tableTraffic, tableAudit, tableEdgeWindows, tableEdgeSources, tableEdgeEvents} {
+		want := "MergeTree"
+		if table == tableAttackHistory {
+			want = "ReplacingMergeTree"
 		}
-	}
-
-	// 2. A table created before a column existed gains it on the next start.
-	if _, err := chExec(base, fmt.Sprintf("ALTER TABLE %s.%s DROP COLUMN top_asns", db, tableAttacks)); err != nil {
-		t.Fatal(err)
-	}
-	if err := w.ensureSchema(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if out, _ := chExec(base, fmt.Sprintf("SELECT count() FROM system.columns WHERE database = '%s' AND table = '%s' AND name = 'top_asns' FORMAT TabSeparated", db, tableAttacks)); out != "1" {
-		t.Fatalf("top_asns after the upgrade pass: %q columns, want 1", out)
+		if out, err := chExec(base, fmt.Sprintf("SELECT engine FROM system.tables WHERE database = '%s' AND name = '%s' FORMAT TabSeparated", db, table)); err != nil || out != want {
+			t.Fatalf("table %s: engine %q err %v, want %s", table, out, err, want)
+		}
 	}
 
 	// 3. Every table takes its rows through the writer.
@@ -159,8 +152,8 @@ func TestRealClickHouse(t *testing.T) {
 	mid := now.Add(-time.Hour).Truncate(time.Hour).Add(30 * time.Minute)
 	e1At, e2At := mid, mid.Add(-10*time.Second)
 	attack := sampleAttack()
-	attack.EventTime = at
-	w.WriteAttack(attack)
+	attack.StartedAt, attack.UpdatedAt = at, at
+	w.WriteAttackHistory(attack)
 	w.WriteTraffic([]TrafficRow{{TS: at, Scope: "host", Key: "203.0.113.20", Group: "global", PPS: 1000}})
 	audit := sampleAudit()
 	audit.EventTime = at
@@ -186,7 +179,7 @@ func TestRealClickHouse(t *testing.T) {
 	// 4. The TTL holds: the window older than ttl_days never lands (expired
 	// rows are filtered as the part is written — three were sent, two exist),
 	// and a merge keeps it that way.
-	for table, want := range map[string]int{tableAttacks: 1, tableTraffic: 1, tableAudit: 1, tableEdgeWindows: 2, tableEdgeSources: 3, tableEdgeEvents: 2} {
+	for table, want := range map[string]int{tableAttackHistory: 1, tableTraffic: 1, tableAudit: 1, tableEdgeWindows: 2, tableEdgeSources: 3, tableEdgeEvents: 2} {
 		if got := chCount(t, base, db, table); got != want {
 			t.Fatalf("%s rows = %d, want %d", table, got, want)
 		}

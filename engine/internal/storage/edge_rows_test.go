@@ -96,14 +96,14 @@ func TestEdgeSchemaIsBestEffort(t *testing.T) {
 	w := NewWriter(cfg, discardLogger())
 	ctx, cancel := context.WithCancel(context.Background())
 	w.Start(ctx)
-	w.WriteAttack(sampleAttack())
+	w.WriteAttackHistory(sampleAttack())
 	waitFor(t, func() bool { mu.Lock(); defer mu.Unlock(); return inserted == 1 })
 	cancel()
 	w.Stop()
 	mu.Lock()
 	defer mu.Unlock()
 	if len(created) != 4 { // database + the three core tables
-		t.Fatalf("core DDL statements = %d, want 4 (database + attack_events, traffic, audit_events): %v", len(created), created)
+		t.Fatalf("core DDL statements = %d, want 4 (database + attack_history, traffic, audit_events): %v", len(created), created)
 	}
 }
 

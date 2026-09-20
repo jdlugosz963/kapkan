@@ -9,10 +9,11 @@ import (
 	"github.com/kapkan-io/kapkan/internal/mitigate"
 )
 
-func TestAttackRowMapping(t *testing.T) {
+func TestAttackHistoryRowMapping(t *testing.T) {
 	at := time.Date(2026, 6, 13, 12, 0, 0, 0, time.UTC)
 	ev := engine.Event{
 		Kind:      engine.AttackStarted,
+		AttackID:  "attack-1",
 		Scope:     engine.ScopeHost,
 		Target:    netip.MustParseAddr("203.0.113.20"),
 		Group:     "web",
@@ -21,6 +22,7 @@ func TestAttackRowMapping(t *testing.T) {
 		Rate:      200000,
 		Threshold: 80000,
 		Rates:     engine.Rates{PPS: 200000, Mbps: 749, FlowsPerSec: 40000},
+		PeakRates: engine.Rates{PPS: 250000, Mbps: 800, FlowsPerSec: 45000},
 		At:        at,
 		Classification: &engine.Classification{
 			Type: engine.AttackNTPAmplification, Confidence: 0.9, SrcPort: 123,
@@ -32,12 +34,12 @@ func TestAttackRowMapping(t *testing.T) {
 	}
 	ban := &mitigate.Ban{State: mitigate.BanActive, DryRun: true}
 
-	r := attackRow(ev, ban)
-	if r.EventTime != "2026-06-13 12:00:00" {
-		t.Errorf("event_time = %q, want ClickHouse UTC literal", r.EventTime)
+	r := attackHistoryStarted(ev, ban)
+	if r.StartedAt != "2026-06-13 12:00:00" || r.UpdatedAt != r.StartedAt {
+		t.Errorf("started/updated = %q/%q, want ClickHouse UTC literal", r.StartedAt, r.UpdatedAt)
 	}
-	if r.Kind != "attack_started" || r.Scope != "host" || r.Target != "203.0.113.20" {
-		t.Errorf("kind/scope/target = %q/%q/%q", r.Kind, r.Scope, r.Target)
+	if r.AttackID != "attack-1" || r.Version != 1 || r.Status != "active" || r.Scope != "host" || r.Target != "203.0.113.20" {
+		t.Errorf("history identity/scope/target = %+v", r)
 	}
 	if r.Group != "web" || r.Direction != "incoming" || r.Metric != "pps" {
 		t.Errorf("group/direction/metric = %q/%q/%q", r.Group, r.Direction, r.Metric)
@@ -45,32 +47,19 @@ func TestAttackRowMapping(t *testing.T) {
 	if r.AttackType != "ntp_amplification" {
 		t.Errorf("attack_type = %q, want ntp_amplification", r.AttackType)
 	}
-	if r.TopSources != "198.51.100.7,198.51.100.8" {
-		t.Errorf("top_sources = %q, want comma-joined sources", r.TopSources)
-	}
-	if r.Upstreams != `[{"key":"Netia","packets":60000,"bytes":1000}]` {
-		t.Errorf("top_upstreams = %q", r.Upstreams)
+	if r.Sample == "" || r.Classification == "" || r.Rates == "" || r.PeakRates == "" {
+		t.Errorf("full evidence missing: %+v", r)
 	}
 	if r.BanState != "active" || r.DryRun != 1 {
 		t.Errorf("ban_state/dry_run = %q/%d, want active/1", r.BanState, r.DryRun)
 	}
-	if r.Rate != 200000 || r.Threshold != 80000 || r.PPS != 200000 || r.FlowsPS != 40000 {
+	if r.Rate != 200000 || r.Threshold != 80000 || r.PPS != 200000 || r.FlowsPS != 40000 || r.PeakPPS != 250000 {
 		t.Errorf("rate fields = %+v", r)
 	}
 
-	// Group-scoped event with no ban: target empty, dry_run from cfg path (0).
-	grp := attackRow(engine.Event{
-		Kind: engine.AttackEnded, Scope: engine.ScopeGroup, Group: "pool",
-		Direction: engine.DirOutgoing, Metric: engine.MetricMbps, At: at,
-	}, nil)
-	if grp.Target != "" {
-		t.Errorf("group event target = %q, want empty", grp.Target)
-	}
-	if grp.Kind != "attack_ended" || grp.Scope != "group" || grp.Group != "pool" {
-		t.Errorf("group row = %+v", grp)
-	}
-	if grp.BanState != "" || grp.DryRun != 0 {
-		t.Errorf("nil ban: ban_state/dry_run = %q/%d, want empty/0", grp.BanState, grp.DryRun)
+	ended := attackHistoryEnded(r, engine.Event{AttackID: "attack-1", At: at.Add(time.Minute), Rates: engine.Rates{PPS: 10}, PeakRates: ev.PeakRates}, nil)
+	if ended.Version != 2 || ended.Status != "ended" || ended.EndedAt == nil || *ended.EndedAt != "2026-06-13 12:01:00" || ended.Sample != r.Sample {
+		t.Errorf("ended row did not retain start evidence: %+v", ended)
 	}
 }
 
