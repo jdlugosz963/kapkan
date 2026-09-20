@@ -605,6 +605,7 @@ type Hostgroup struct {
 type Group struct {
 	Name       string     `json:"name"`
 	Calc       CalcMethod `json:"calculation"`
+	Networks   []string   `json:"networks"`
 	Thresholds Thresholds `json:"thresholds"`
 	// OutThresholds is nil when outgoing detection is disabled for the group.
 	OutThresholds *Thresholds `json:"thresholds_outgoing,omitempty"`
@@ -2156,6 +2157,7 @@ func (c *Config) validateHostgroups() error {
 		c.Groups = append(c.Groups, Group{
 			Name:                     hg.Name,
 			Calc:                     calc,
+			Networks:                 hg.Networks,
 			Thresholds:               th,
 			OutThresholds:            outTh,
 			Baseline:                 groupBaseline,

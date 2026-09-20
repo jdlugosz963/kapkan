@@ -158,6 +158,7 @@
     return {
       name: g.name,
       calc: g.calculation,
+      networks: g.networks || [],
       thresholds: g.thresholds || {},
       mitigation: g.mitigation,
       ban_enabled: !!g.ban,

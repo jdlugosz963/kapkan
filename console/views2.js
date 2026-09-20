@@ -195,6 +195,9 @@
         h("div", {}, [h("div", { class: "section-label", text: I.t("hg.thresholds") }), h("dl", { class: "kv" }, [].concat.apply([], thrRows))]),
         h("div", {}, [h("div", { class: "section-label", text: I.t("hg.baseline") }), h("dl", { class: "kv" }, [].concat.apply([], blRows))])
       ]),
+      h("div", {}, [h("div", { class: "section-label", text: I.t("se.networks") }), h("div", { class: "row wrap", style: { gap: "6px" } }, g.networks && g.networks.length
+        ? g.networks.map(function (network) { return K.badge("badge--accent", network); })
+        : h("span", { class: "td-muted", text: I.t("common.na") }))]),
       h("div", {}, [
         h("div", { class: "section-label" }, [w.icon("layers"), h("span", { text: I.t("hg.escalation") }), h("span", { class: "td-muted", style: { fontSize: "var(--t-xs)" }, text: "· " + I.t("lad.config") })]),
         K.ladder(g.escalation, -1, { config: true })

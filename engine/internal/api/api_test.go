@@ -1183,6 +1183,12 @@ func TestTenantScoping(t *testing.T) {
 	}
 	if groups, _ := st["hostgroups"].([]any); len(groups) != 1 {
 		t.Errorf("scoped status hostgroups = %v, want only custA-web", st["hostgroups"])
+	} else {
+		group, _ := groups[0].(map[string]any)
+		networks, _ := group["networks"].([]any)
+		if len(networks) != 1 || networks[0] != "203.0.113.0/26" {
+			t.Errorf("scoped status hostgroup networks = %v, want [203.0.113.0/26]", group["networks"])
+		}
 	}
 
 	// admin sees both tenants and the global fields.
