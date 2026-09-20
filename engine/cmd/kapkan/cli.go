@@ -66,10 +66,11 @@ const (
 // always had, plus the FlagSet so callers can ask what was explicitly set and
 // what was left over as positional arguments.
 type cliFlags struct {
-	configPath string
-	logFormat  string
-	logLevel   string
-	dumpSchema bool
+	configPath    string
+	configOverlay string
+	logFormat     string
+	logLevel      string
+	dumpSchema    bool
 	// dumpZonesSchema prints the edge zones file's schema (edge track).
 	dumpZonesSchema bool
 	checkConfig     string
@@ -97,6 +98,7 @@ func parseFlags(name string, argv []string, onError flag.ErrorHandling) (*cliFla
 	c.fs = fs
 
 	fs.StringVar(&c.configPath, "config", "configs/dev.yaml", "path to YAML config file")
+	fs.StringVar(&c.configOverlay, "config-overlay", "", "path to an optional YAML config overlay")
 	fs.StringVar(&c.logFormat, "log-format", "json", "log format: json or text")
 	fs.StringVar(&c.logLevel, "log-level", "info", "log level: debug, info, warn, error")
 	fs.BoolVar(&c.dumpSchema, "dump-schema", false, "print the config JSON schema to stdout and exit")

@@ -594,6 +594,7 @@ honouring one of them.
 | Flag | Default | Description |
 | --- | --- | --- |
 | `-config <path>` | `configs/dev.yaml` | Path to the YAML config file. |
+| `-config-overlay <path>` | — | Optional YAML overlay merged onto `-config`; mappings merge recursively, while lists and scalar values replace the base values. An empty overlay changes nothing. |
 | `-log-format <fmt>` | `json` | `json` (for log collectors) or `text` (human-readable). Logs always go to stderr. |
 | `-log-level <lvl>` | `info` | `debug`, `info`, `warn` or `error`. |
 | `-check-config <path>` | — | Parse and validate that config — including cross-field rules a static schema cannot express — print the resolved result, and exit `0` valid / `1` invalid. Drops straight into CI or a pre-deploy gate. A valid config may still print a `WARNING` — today, a static rule that can never fire — without changing the exit code. |

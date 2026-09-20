@@ -27,10 +27,11 @@ func parse(t *testing.T, argv ...string) (*cliFlags, error) {
 // a deliberate act rather than the side effect of an edit.
 func TestFlagInventoryIsFrozen(t *testing.T) {
 	want := map[string]string{
-		"config":      "configs/dev.yaml",
-		"log-format":  "json",
-		"log-level":   "info",
-		"dump-schema": "false",
+		"config":         "configs/dev.yaml",
+		"config-overlay": "",
+		"log-format":     "json",
+		"log-level":      "info",
+		"dump-schema":    "false",
 		// The edge zones file's schema (edge track, E3.6).
 		"dump-zones-schema": "false",
 		"check-config":      "",
@@ -111,6 +112,12 @@ func TestExistingInvocationsAreUntouched(t *testing.T) {
 		{"systemd unit order", []string{"-config", "/etc/kapkan/config.yaml", "-log-format", "json", "-log-level", "info"},
 			func(t *testing.T, f *cliFlags) {
 				if f.configPath != "/etc/kapkan/config.yaml" || f.logLevel != "info" {
+					t.Errorf("%+v", f)
+				}
+			}},
+		{"config overlay", []string{"-config", "/etc/kapkan/config.yaml", "-config-overlay", "/tmp/dev.yaml"},
+			func(t *testing.T, f *cliFlags) {
+				if f.configPath != "/etc/kapkan/config.yaml" || f.configOverlay != "/tmp/dev.yaml" {
 					t.Errorf("%+v", f)
 				}
 			}},

@@ -6,6 +6,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"net"
 	"net/netip"
@@ -1519,11 +1520,24 @@ func (a API) DashboardEnabled() bool { return a.Dashboard == nil || *a.Dashboard
 
 // Load reads, parses and validates the configuration file at path.
 func Load(path string) (*Config, error) {
+	return LoadWithOverlay(path, "")
+}
+
+// LoadWithOverlay reads the base configuration and optionally overlays a
+// second YAML document before parsing and validation.
+func LoadWithOverlay(path, overlayPath string) (*Config, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read config: %w", err)
 	}
-	cfg, err := Parse(raw)
+	overlay := []byte(nil)
+	if overlayPath != "" {
+		overlay, err = os.ReadFile(overlayPath)
+		if err != nil {
+			return nil, fmt.Errorf("read config overlay: %w", err)
+		}
+	}
+	cfg, err := ParseWithOverlay(raw, overlay)
 	if err != nil {
 		return nil, err
 	}
@@ -1547,6 +1561,23 @@ func Load(path string) (*Config, error) {
 
 // Parse parses and validates raw YAML configuration bytes.
 func Parse(raw []byte) (*Config, error) {
+	return ParseWithOverlay(raw, nil)
+}
+
+// ParseWithOverlay recursively merges YAML mappings before parsing. Sequence
+// and scalar values in the overlay replace their base values in full.
+func ParseWithOverlay(raw, overlay []byte) (*Config, error) {
+	if len(strings.TrimSpace(string(overlay))) > 0 {
+		merged, err := mergeYAML(raw, overlay)
+		if err != nil {
+			return nil, fmt.Errorf("merge config overlay: %w", err)
+		}
+		raw = merged
+	}
+	return parse(raw)
+}
+
+func parse(raw []byte) (*Config, error) {
 	// Safety default: mitigation is dry-run unless the file explicitly
 	// says otherwise. Setting it before unmarshal means an absent key
 	// keeps the safe value.
@@ -1565,6 +1596,53 @@ func Parse(raw []byte) (*Config, error) {
 		return nil, fmt.Errorf("validate config: %w", err)
 	}
 	return cfg, nil
+}
+
+func mergeYAML(base, overlay []byte) ([]byte, error) {
+	baseDoc, err := decodeYAMLDocument(base)
+	if err != nil {
+		return nil, fmt.Errorf("parse base: %w", err)
+	}
+	overlayDoc, err := decodeYAMLDocument(overlay)
+	if err != nil {
+		return nil, fmt.Errorf("parse overlay: %w", err)
+	}
+	mergeYAMLNode(baseDoc.Content[0], overlayDoc.Content[0])
+	return yaml.Marshal(baseDoc.Content[0])
+}
+
+func decodeYAMLDocument(raw []byte) (*yaml.Node, error) {
+	var doc yaml.Node
+	err := yaml.NewDecoder(strings.NewReader(string(raw))).Decode(&doc)
+	if errors.Is(err, io.EOF) || len(doc.Content) == 0 {
+		return nil, fmt.Errorf("document is empty")
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &doc, nil
+}
+
+func mergeYAMLNode(base, overlay *yaml.Node) {
+	if base.Kind != yaml.MappingNode || overlay.Kind != yaml.MappingNode {
+		*base = *overlay
+		return
+	}
+	for i := 0; i < len(overlay.Content); i += 2 {
+		key, value := overlay.Content[i], overlay.Content[i+1]
+		found := false
+		for j := 0; j < len(base.Content); j += 2 {
+			if base.Content[j].Value != key.Value {
+				continue
+			}
+			mergeYAMLNode(base.Content[j+1], value)
+			found = true
+			break
+		}
+		if !found {
+			base.Content = append(base.Content, key, value)
+		}
+	}
 }
 
 func (c *Config) validate() error {
@@ -3563,8 +3641,9 @@ func normalizeListen(s string) string {
 // Store holds the current configuration snapshot and supports atomic
 // replacement on SIGHUP-driven reload.
 type Store struct {
-	path string
-	cur  atomic.Pointer[Config]
+	path        string
+	overlayPath string
+	cur         atomic.Pointer[Config]
 	// changed is the closed-channel broadcast behind Changed(): a pointer to
 	// the channel handed to current waiters, swapped for nil and closed on
 	// every successful Reload. Lock-free so the hot path (Get) stays a plain
@@ -3575,7 +3654,12 @@ type Store struct {
 
 // NewStore creates a Store serving cfg, remembering path for Reload.
 func NewStore(path string, cfg *Config) *Store {
-	s := &Store{path: path}
+	return NewStoreWithOverlay(path, "", cfg)
+}
+
+// NewStoreWithOverlay creates a Store that reloads the base and overlay files.
+func NewStoreWithOverlay(path, overlayPath string, cfg *Config) *Store {
+	s := &Store{path: path, overlayPath: overlayPath}
 	s.cur.Store(cfg)
 	return s
 }
@@ -3588,7 +3672,7 @@ func (s *Store) Get() *Config { return s.cur.Load() }
 // stays active and the error is returned. Listen addresses and BGP identity
 // cannot change at runtime; a reload that alters them is rejected.
 func (s *Store) Reload() (*Config, error) {
-	next, err := Load(s.path)
+	next, err := LoadWithOverlay(s.path, s.overlayPath)
 	if err != nil {
 		return nil, err
 	}

@@ -49,7 +49,7 @@ func main() {
 		return
 	}
 	if f.checkUpdate {
-		os.Exit(checkForUpdate(f.configPath))
+		os.Exit(checkForUpdateWithOverlay(f.configPath, f.configOverlay))
 	}
 	if f.dumpSchema || f.dumpZonesSchema {
 		name, gen := "dump-schema", config.GenerateSchema
@@ -68,7 +68,7 @@ func main() {
 		return
 	}
 	if f.checkConfig != "" {
-		os.Exit(checkConfigFile(f.checkConfig))
+		os.Exit(checkConfigFiles(f.checkConfig, f.configOverlay))
 	}
 	// `kapkan -s reload|stop|quit` signals a running daemon (via its pid file)
 	// and exits — it never starts a daemon of its own.
@@ -81,7 +81,7 @@ func main() {
 	}
 
 	log := logging.New(f.logFormat, f.logLevel)
-	if err := run(f.configPath, f.pidFile, log); err != nil {
+	if err := run(f.configPath, f.configOverlay, f.pidFile, log); err != nil {
 		log.Error("fatal", "err", err)
 		os.Exit(1)
 	}
@@ -94,13 +94,21 @@ func main() {
 // operator's own binary. The resolved per-group mitigation is shown so an
 // inherited flowspec/divert that silently degrades on a total group is visible.
 func checkConfigFile(path string) int {
-	return checkConfigTo(os.Stdout, path)
+	return checkConfigFiles(path, "")
+}
+
+func checkConfigFiles(path, overlayPath string) int {
+	return checkConfigToWithOverlay(os.Stdout, path, overlayPath)
 }
 
 // checkConfigTo is checkConfigFile writing its report to w, so a test can
 // read the OK line and the WARNING block that follows it.
 func checkConfigTo(w io.Writer, path string) int {
-	cfg, err := config.Load(path)
+	return checkConfigToWithOverlay(w, path, "")
+}
+
+func checkConfigToWithOverlay(w io.Writer, path, overlayPath string) int {
+	cfg, err := config.LoadWithOverlay(path, overlayPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "INVALID  %s\n  %v\n", path, err)
 		return 1
@@ -233,7 +241,11 @@ func printDataplaneWarnings(cfg *config.Config) {
 // flag gates only the background poll — using the configured channel/url. It is
 // the explicit, operator-initiated counterpart to the periodic check.
 func checkForUpdate(path string) int {
-	cfg, err := config.Load(path)
+	return checkForUpdateWithOverlay(path, "")
+}
+
+func checkForUpdateWithOverlay(path, overlayPath string) int {
+	cfg, err := config.LoadWithOverlay(path, overlayPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "config: %v\n", err)
 		return 1
@@ -276,12 +288,12 @@ func ladderString(stages []config.EscalationStage) string {
 	return "mitigation=" + strings.Join(parts, " -> ")
 }
 
-func run(configPath, pidPath string, log *slog.Logger) error {
-	cfg, err := config.Load(configPath)
+func run(configPath, overlayPath, pidPath string, log *slog.Logger) error {
+	cfg, err := config.LoadWithOverlay(configPath, overlayPath)
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
-	store := config.NewStore(configPath, cfg)
+	store := config.NewStoreWithOverlay(configPath, overlayPath, cfg)
 	// Said at start as well as on every reload (ApplyReload), so an unbound
 	// agent token is never a warning only -check-config would have shown.
 	app.WarnUnboundAgentTokens(log, cfg)
