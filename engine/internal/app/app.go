@@ -84,7 +84,10 @@ func New(store *config.Store, log *slog.Logger) (*App, error) {
 	// (a corrupt/unreadable .mmdb, or one removed between load and open) is
 	// logged and the detector runs without attribution rather than refusing to
 	// start over a non-critical data file.
-	engineOpts := []engine.Option{engine.WithLogger(log)}
+	engineOpts := []engine.Option{
+		engine.WithLogger(log),
+		engine.WithWindow(cfg.DetectionWindowSeconds),
+	}
 	if gc := cfg.GeoIPCfg; gc.Enabled {
 		db, err := geoip.Open(gc.ASNPath, gc.CountryPath)
 		if err != nil {

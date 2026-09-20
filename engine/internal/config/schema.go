@@ -58,7 +58,8 @@ var enumValues = map[string][]string{
 // by validate(). Same global-path keying with a "hostgroups." strip on lookup.
 // Cross-field upper bounds (e.g. batch_size <= queue_size) cannot live here.
 var numericBounds = map[string]map[string]float64{
-	"sampling.default_rate": {"minimum": 1},
+	"detection_window_seconds": {"minimum": 1, "maximum": 60},
+	"sampling.default_rate":    {"minimum": 1},
 
 	"thresholds.pps":           {"minimum": 1},
 	"thresholds.mbps":          {"minimum": 1},

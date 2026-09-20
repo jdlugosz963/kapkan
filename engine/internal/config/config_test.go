@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"math"
 	"net/netip"
 	"os"
@@ -81,6 +82,38 @@ func TestDryRunDefaultsTrue(t *testing.T) {
 	}
 	if !cfg.DryRun {
 		t.Error("absent dry_run must default to true")
+	}
+}
+
+func TestDetectionWindowSeconds(t *testing.T) {
+	t.Run("default", func(t *testing.T) {
+		cfg, err := Parse([]byte(validYAML))
+		if err != nil {
+			t.Fatalf("Parse() error = %v", err)
+		}
+		if cfg.DetectionWindowSeconds != 5 {
+			t.Fatalf("DetectionWindowSeconds = %d, want 5", cfg.DetectionWindowSeconds)
+		}
+	})
+
+	t.Run("configured", func(t *testing.T) {
+		yaml := strings.Replace(validYAML, "dry_run: true\n", "dry_run: true\ndetection_window_seconds: 15\n", 1)
+		cfg, err := Parse([]byte(yaml))
+		if err != nil {
+			t.Fatalf("Parse() error = %v", err)
+		}
+		if cfg.DetectionWindowSeconds != 15 {
+			t.Fatalf("DetectionWindowSeconds = %d, want 15", cfg.DetectionWindowSeconds)
+		}
+	})
+
+	for _, seconds := range []int{-1, 0, 61} {
+		t.Run(fmt.Sprintf("reject_%d", seconds), func(t *testing.T) {
+			yaml := strings.Replace(validYAML, "dry_run: true\n", fmt.Sprintf("dry_run: true\ndetection_window_seconds: %d\n", seconds), 1)
+			if _, err := Parse([]byte(yaml)); err == nil || !strings.Contains(err.Error(), "detection_window_seconds") {
+				t.Fatalf("Parse() error = %v, want detection_window_seconds error", err)
+			}
+		})
 	}
 }
 
@@ -423,6 +456,15 @@ func TestStoreReload(t *testing.T) {
 	}
 	if _, err := store.Reload(); err == nil || !strings.Contains(err.Error(), "listen") {
 		t.Errorf("Reload() with listen change: error = %v, want listen-change rejection", err)
+	}
+
+	// Detection window sizes the engine's per-host ring and requires a restart.
+	rewindow := strings.Replace(updated, "dry_run: true\n", "dry_run: true\ndetection_window_seconds: 15\n", 1)
+	if err := os.WriteFile(path, []byte(rewindow), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Reload(); err == nil || !strings.Contains(err.Error(), "detection_window_seconds") {
+		t.Errorf("Reload() with detection window change: error = %v, want restart-required rejection", err)
 	}
 }
 

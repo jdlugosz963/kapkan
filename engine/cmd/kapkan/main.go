@@ -121,6 +121,7 @@ func checkConfigToWithOverlay(w io.Writer, path, overlayPath string) int {
 	p := func(format string, a ...any) { _, _ = fmt.Fprintf(w, format, a...) }
 	p("OK  %s\n", path)
 	p("  mode:      %s\n", mode)
+	p("  window:    %ds\n", cfg.DetectionWindowSeconds)
 	p("  networks:  %s\n", strings.Join(cfg.Networks, ", "))
 	p("  listeners: sflow=%q netflow=%q\n", cfg.Listen.SFlow, cfg.Listen.NetFlow)
 	p("  groups:    %d (including the implicit global group)\n", len(cfg.Groups))

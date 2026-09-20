@@ -10,6 +10,9 @@ Kapkan detects volumetric attacks &mdash; floods that try to saturate a host wit
 volume, as opposed to application-layer attacks &mdash; **per destination host** over a sliding time
 window. Rates are evaluated as per-second averages over that window (5 seconds by default), so a
 sub-second spike that does not sustain across the window will not, by itself, open an attack.
+Set `detection_window_seconds` to a value from `1` to `60` to change the window; changing it
+requires a restart. A longer window smooths exporters that deliver accumulated flow records in
+bursts, at the cost of slower and more diluted detection of short attacks.
 For every protected address it keeps windowed rate counters, and the moment any configured
 threshold is crossed it opens an attack, attaches a flow sample, classifies the vector, and
 hands the event to mitigation, notifications and the API.

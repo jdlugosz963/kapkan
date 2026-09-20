@@ -32,9 +32,12 @@ var errStatDeferred = errors.New("file check deferred to server-side load")
 // shape exactly; parsed derivatives (prefixes, addresses, community value)
 // are populated during validation and must not be set by hand.
 type Config struct {
-	DryRun   bool     `yaml:"dry_run"`
-	Listen   Listen   `yaml:"listen"`
-	Sampling Sampling `yaml:"sampling"`
+	DryRun bool `yaml:"dry_run"`
+	// DetectionWindowSeconds is the sliding window used to calculate per-second
+	// traffic rates. Changing it requires a restart.
+	DetectionWindowSeconds int      `yaml:"detection_window_seconds"`
+	Listen                 Listen   `yaml:"listen"`
+	Sampling               Sampling `yaml:"sampling"`
 	// FlowSources optionally allowlists the trusted flow-exporter source
 	// addresses. Telemetry arrives over unauthenticated UDP, so the exporter
 	// (source) address is spoofable; when this list is set, only telemetry
@@ -1120,11 +1123,13 @@ const (
 
 // Data-plane defaults, applied by validateDataplane.
 const (
-	defaultPinPath             = "/sys/fs/bpf/kapkan"
-	defaultMaxDynamicRules     = 4096
-	defaultMaxStaticRules      = 256
-	defaultMaxRatelimitSources = 1 << 20
-	defaultStaleAfterSeconds   = 15
+	defaultDetectionWindowSeconds = 5
+	maxDetectionWindowSeconds     = 60
+	defaultPinPath                = "/sys/fs/bpf/kapkan"
+	defaultMaxDynamicRules        = 4096
+	defaultMaxStaticRules         = 256
+	defaultMaxRatelimitSources    = 1 << 20
+	defaultStaleAfterSeconds      = 15
 
 	// Fingerprint-plane defaults.
 	defaultFingerprintSamplePPS       = 1000
@@ -1581,7 +1586,10 @@ func parse(raw []byte) (*Config, error) {
 	// Safety default: mitigation is dry-run unless the file explicitly
 	// says otherwise. Setting it before unmarshal means an absent key
 	// keeps the safe value.
-	cfg := &Config{DryRun: true}
+	cfg := &Config{
+		DryRun:                 true,
+		DetectionWindowSeconds: defaultDetectionWindowSeconds,
+	}
 	cfg.BGP.ListenPort = -1
 	// Graceful Restart is on by default; an absent graceful_restart block keeps
 	// it enabled, while `enabled: false` in the file overrides this. Timers
@@ -1646,6 +1654,9 @@ func mergeYAMLNode(base, overlay *yaml.Node) {
 }
 
 func (c *Config) validate() error {
+	if c.DetectionWindowSeconds < 1 || c.DetectionWindowSeconds > maxDetectionWindowSeconds {
+		return fmt.Errorf("detection_window_seconds must be between 1 and %d, got %d", maxDetectionWindowSeconds, c.DetectionWindowSeconds)
+	}
 	if c.Listen.SFlow == "" && c.Listen.NetFlow == "" {
 		return fmt.Errorf("listen: at least one of sflow/netflow must be set")
 	}
@@ -3677,6 +3688,9 @@ func (s *Store) Reload() (*Config, error) {
 		return nil, err
 	}
 	prev := s.cur.Load()
+	if next.DetectionWindowSeconds != prev.DetectionWindowSeconds {
+		return nil, fmt.Errorf("reload: detection_window_seconds cannot change at runtime (restart required)")
+	}
 	if next.Listen != prev.Listen {
 		return nil, fmt.Errorf("reload: listen addresses cannot change at runtime (restart required)")
 	}

@@ -103,6 +103,7 @@ refinement.
 | Key | Meaning |
 | --- | --- |
 | `dry_run` | When `true` (the default, including when absent), blackholes are logged and tracked but **never announced**. |
+| `detection_window_seconds` | Sliding window used to calculate per-second traffic rates (`1`–`60`, default `5`). Longer windows smooth bursty flow exports but delay and dilute detection. Requires a restart. |
 | `listen.sflow` / `listen.netflow` | UDP listen addresses. NetFlow v5/v9 and IPFIX share the `netflow` socket. At least one listener is required. See [How it works](/docs/how-it-works). |
 | `sampling.default_rate` | Sampling rate used when an exporter does not report its own. Must be `>= 1`. |
 | `sampling.boundary` | Optional per-exporter interface-boundary counting that deduplicates a flow seen at multiple sampling vantage points (redundant exporters, ingress+egress sampling, transit links). Each entry gives an exporter's `external_ifindexes` (and optional `egress_sampling`); a flow is then counted only when it crosses an external interface. Exporters without an entry count every sample. See Sampling correction below. |
@@ -197,6 +198,8 @@ networks:                           # detection applies ONLY inside these prefix
 protected_whitelist:                # never banned, regardless of traffic
   - "203.0.113.1"                   # gateway / router
   - "203.0.113.2"                   # authoritative nameserver
+
+detection_window_seconds: 5         # rate averaging window, 1-60; restart to change
 
 thresholds:                         # per destination host, after sampling correction
   pps: 80000

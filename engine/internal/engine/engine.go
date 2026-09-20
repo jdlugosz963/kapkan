@@ -228,7 +228,7 @@ type Engine struct {
 // Option configures an Engine.
 type Option func(*Engine)
 
-// WithWindow sets the sliding window length in seconds (default 15).
+// WithWindow sets the sliding window length in seconds (default 5).
 func WithWindow(seconds int) Option {
 	return func(e *Engine) {
 		if seconds > 0 {
@@ -283,7 +283,7 @@ func WithGeoIP(r geoip.Resolver) Option {
 func New(store *config.Store, opts ...Option) *Engine {
 	e := &Engine{
 		store:     store,
-		windowSec: 15,
+		windowSec: 5,
 		groups:    make(map[string]*groupState),
 		carpets:   make(map[netip.Prefix]*carpetState),
 		events:    make(chan Event, 256),

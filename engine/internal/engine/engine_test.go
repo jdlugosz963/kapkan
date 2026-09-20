@@ -142,8 +142,8 @@ func TestWindowedRateMath(t *testing.T) {
 
 func TestDefaultWindow(t *testing.T) {
 	e := New(testStore(t))
-	if e.windowSec != 15 {
-		t.Fatalf("windowSec = %d, want 15", e.windowSec)
+	if e.windowSec != 5 {
+		t.Fatalf("windowSec = %d, want 5", e.windowSec)
 	}
 }
 

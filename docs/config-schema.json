@@ -456,6 +456,11 @@
       "type": "object",
       "x-optional": true
     },
+    "detection_window_seconds": {
+      "maximum": 60,
+      "minimum": 1,
+      "type": "integer"
+    },
     "dry_run": {
       "type": "boolean"
     },
