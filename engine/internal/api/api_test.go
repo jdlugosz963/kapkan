@@ -220,6 +220,21 @@ func TestStatusEndpoint(t *testing.T) {
 	if resp["docs_url"] != "https://docs.example.test/kapkan" {
 		t.Errorf("docs_url = %v, want configured URL", resp["docs_url"])
 	}
+
+	withPool := strings.Replace(apiYAML, "default_rate: 1000", "default_rate: 1000\n  boundary:\n    - exporter: \"10.0.0.2\"\n      external_ifindexes: [1]\n      interface_labels: {1: \"Transit\"}\n  upstream_capacity_pools:\n    - name: \"Transit shared\"\n      ingress_mbps: 10000\n      egress_mbps: 10000\n      members: [{exporter: \"10.0.0.2\", ifindex: 1}]", 1)
+	withPoolServer := testServer(t, storeFromYAML(t, withPool))
+	withPoolResp := do(t, withPoolServer.Handler(), http.MethodGet, "/api/v1/status", "")
+	if err := json.Unmarshal(withPoolResp.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	pools, ok := resp["upstream_capacity_pools"].([]any)
+	if !ok || len(pools) != 1 {
+		t.Fatalf("upstream_capacity_pools = %#v, want one pool", resp["upstream_capacity_pools"])
+	}
+	pool := pools[0].(map[string]any)
+	if pool["name"] != "Transit shared" || pool["ingress_mbps"] != float64(10000) || pool["egress_mbps"] != float64(10000) {
+		t.Errorf("upstream pool = %#v, want Transit shared 10/10G", pool)
+	}
 }
 
 func TestHealthzReflectsReadiness(t *testing.T) {

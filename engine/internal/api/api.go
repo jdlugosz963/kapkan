@@ -681,6 +681,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"active_attacks": activeAttacks,
 		"active_bans":    activeBans,
 		"hostgroups":     groups,
+		"upstream_capacity_pools": cfg.UpstreamCapacityPools(),
 		// docs_url is public documentation metadata, not deployment topology;
 		// all roles need it so the console can offer the same help link.
 		"docs_url": cfg.API.DocsURL,

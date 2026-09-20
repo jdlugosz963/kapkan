@@ -116,6 +116,7 @@ type Config struct {
 	// address. nil/empty means interface-boundary counting is disabled (every
 	// sample counted). Populated by validate().
 	boundary map[netip.Addr]exporterBoundary `yaml:"-"`
+	upstreamCapacityPools []ResolvedUpstreamCapacityPool `yaml:"-"`
 	// Groups are the resolved hostgroups; Groups[0] is always the implicit
 	// global fallback group carrying the top-level thresholds.
 	Groups []Group `yaml:"-"`
@@ -170,6 +171,10 @@ type Sampling struct {
 	// external interfaces to list under Boundary; enable it briefly, read the
 	// breakdown, then turn it off (the metric is not cardinality-bounded).
 	BoundaryDebug bool `yaml:"boundary_debug"`
+	// UpstreamCapacityPools defines shared ingress/egress capacity pools for
+	// one or more boundary interfaces. The console uses them to show actual
+	// utilization rather than each member's share of aggregate traffic.
+	UpstreamCapacityPools []UpstreamCapacityPool `yaml:"upstream_capacity_pools"`
 }
 
 // ExporterBoundary classifies the external (edge/uplink/border) interfaces of
@@ -189,6 +194,29 @@ type ExporterBoundary struct {
 	// packet appear twice. When true, the sampling rate of boundary-counted
 	// traffic for this exporter is halved, correcting the double back to one.
 	EgressSampling bool `yaml:"egress_sampling"`
+}
+// UpstreamCapacityPool is a shared physical or contracted bandwidth pool.
+// Members are addressed by exporter and ifIndex because names are display
+// labels and may intentionally be reused across links.
+type UpstreamCapacityPool struct {
+	Name        string                 `yaml:"name"`
+	IngressMbps uint64                 `yaml:"ingress_mbps"`
+	EgressMbps  uint64                 `yaml:"egress_mbps"`
+	Members     []UpstreamPoolMember   `yaml:"members"`
+}
+
+// UpstreamPoolMember identifies one labelled boundary interface.
+type UpstreamPoolMember struct {
+	Exporter string `yaml:"exporter"`
+	Ifindex  uint32 `yaml:"ifindex"`
+}
+
+// ResolvedUpstreamCapacityPool is the operator-safe form returned to the UI.
+type ResolvedUpstreamCapacityPool struct {
+	Name        string   `json:"name"`
+	IngressMbps uint64   `json:"ingress_mbps"`
+	EgressMbps  uint64   `json:"egress_mbps"`
+	Upstreams   []string `json:"upstreams"`
 }
 
 // exporterBoundary is the resolved, lookup-ready form of one ExporterBoundary.
@@ -1682,6 +1710,9 @@ func (c *Config) validate() error {
 		return fmt.Errorf("sampling.default_rate must be >= 1, got %d", c.Sampling.DefaultRate)
 	}
 	if err := c.resolveBoundary(); err != nil {
+		return err
+	}
+	if err := c.resolveUpstreamCapacityPools(); err != nil {
 		return err
 	}
 
@@ -3563,6 +3594,74 @@ func (c *Config) resolveBoundary() error {
 		c.boundary[addr] = exporterBoundary{external: ext, labels: labels, egress: eb.EgressSampling}
 	}
 	return nil
+}
+
+// resolveUpstreamCapacityPools resolves pool members to their boundary labels.
+// It runs after resolveBoundary, so every member is guaranteed to name an
+// external, operator-labelled interface.
+func (c *Config) resolveUpstreamCapacityPools() error {
+	c.upstreamCapacityPools = nil
+	if len(c.Sampling.UpstreamCapacityPools) == 0 {
+		return nil
+	}
+
+	names := make(map[string]struct{}, len(c.Sampling.UpstreamCapacityPools))
+	members := make(map[string]struct{})
+	for poolIndex := range c.Sampling.UpstreamCapacityPools {
+		pool := c.Sampling.UpstreamCapacityPools[poolIndex]
+		pool.Name = strings.TrimSpace(pool.Name)
+		if pool.Name == "" {
+			return fmt.Errorf("sampling.upstream_capacity_pools[%d].name must not be empty", poolIndex)
+		}
+		if _, duplicate := names[pool.Name]; duplicate {
+			return fmt.Errorf("sampling.upstream_capacity_pools: duplicate name %q", pool.Name)
+		}
+		names[pool.Name] = struct{}{}
+		if pool.IngressMbps == 0 || pool.EgressMbps == 0 {
+			return fmt.Errorf("sampling.upstream_capacity_pools[%d] (%s): ingress_mbps and egress_mbps must be greater than zero", poolIndex, pool.Name)
+		}
+		if len(pool.Members) == 0 {
+			return fmt.Errorf("sampling.upstream_capacity_pools[%d] (%s): members must list at least one interface", poolIndex, pool.Name)
+		}
+
+		resolved := ResolvedUpstreamCapacityPool{
+			Name: pool.Name, IngressMbps: pool.IngressMbps, EgressMbps: pool.EgressMbps,
+			Upstreams: make([]string, 0, len(pool.Members)),
+		}
+		labels := make(map[string]struct{}, len(pool.Members))
+		for memberIndex, member := range pool.Members {
+			addr, err := netip.ParseAddr(member.Exporter)
+			if err != nil {
+				return fmt.Errorf("sampling.upstream_capacity_pools[%d] (%s).members[%d].exporter: invalid IP %q: %w", poolIndex, pool.Name, memberIndex, member.Exporter, err)
+			}
+			addr = addr.Unmap()
+			boundary, found := c.boundary[addr]
+			if !found {
+				return fmt.Errorf("sampling.upstream_capacity_pools[%d] (%s).members[%d]: exporter %q has no sampling.boundary entry", poolIndex, pool.Name, memberIndex, member.Exporter)
+			}
+			label, found := boundary.labels[member.Ifindex]
+			if !found {
+				return fmt.Errorf("sampling.upstream_capacity_pools[%d] (%s).members[%d]: interface %d must be an external interface with interface_labels", poolIndex, pool.Name, memberIndex, member.Ifindex)
+			}
+			memberKey := addr.String() + "/" + strconv.FormatUint(uint64(member.Ifindex), 10)
+			if _, duplicate := members[memberKey]; duplicate {
+				return fmt.Errorf("sampling.upstream_capacity_pools: interface %s is assigned to more than one pool", memberKey)
+			}
+			members[memberKey] = struct{}{}
+			if _, duplicate := labels[label]; duplicate {
+				return fmt.Errorf("sampling.upstream_capacity_pools[%d] (%s): duplicate upstream label %q is ambiguous", poolIndex, pool.Name, label)
+			}
+			labels[label] = struct{}{}
+			resolved.Upstreams = append(resolved.Upstreams, label)
+		}
+		c.upstreamCapacityPools = append(c.upstreamCapacityPools, resolved)
+	}
+	return nil
+}
+
+// UpstreamCapacityPools returns the resolved, UI-safe capacity pools.
+func (c *Config) UpstreamCapacityPools() []ResolvedUpstreamCapacityPool {
+	return c.upstreamCapacityPools
 }
 
 // BoundaryDebugEnabled reports whether the boundary-discovery metric is on.

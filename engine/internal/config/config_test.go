@@ -1518,6 +1518,46 @@ func TestBoundaryDisabled(t *testing.T) {
 	}
 }
 
+func TestUpstreamCapacityPools(t *testing.T) {
+	cfg, err := Parse([]byte(withBoundary("\n" +
+		"  boundary:\n" +
+		"    - exporter: \"10.1.32.2\"\n" +
+		"      external_ifindexes: [75, 102, 109]\n" +
+		"      interface_labels: {75: \"OPL-TPNET\", 102: \"OPL-CPOP\", 109: \"OPL-TPIX\"}\n" +
+		"  upstream_capacity_pools:\n" +
+		"    - name: \"OPL shared\"\n" +
+		"      ingress_mbps: 10000\n" +
+		"      egress_mbps: 10000\n" +
+		"      members:\n" +
+		"        - {exporter: \"10.1.32.2\", ifindex: 75}\n" +
+		"        - {exporter: \"10.1.32.2\", ifindex: 102}\n" +
+		"        - {exporter: \"10.1.32.2\", ifindex: 109}")))
+	if err != nil {
+		t.Fatalf("Parse(capacity pool) error = %v", err)
+	}
+	pools := cfg.UpstreamCapacityPools()
+	if len(pools) != 1 || pools[0].Name != "OPL shared" || pools[0].IngressMbps != 10000 || pools[0].EgressMbps != 10000 {
+		t.Fatalf("UpstreamCapacityPools = %+v, want OPL shared 10/10G pool", pools)
+	}
+	if got, want := strings.Join(pools[0].Upstreams, ","), "OPL-TPNET,OPL-CPOP,OPL-TPIX"; got != want {
+		t.Errorf("pool upstreams = %q, want %q", got, want)
+	}
+
+	bad := withBoundary("\n" +
+		"  boundary:\n" +
+		"    - exporter: \"10.1.32.2\"\n" +
+		"      external_ifindexes: [75]\n" +
+		"      interface_labels: {75: \"OPL-TPNET\"}\n" +
+		"  upstream_capacity_pools:\n" +
+		"    - name: \"OPL shared\"\n" +
+		"      ingress_mbps: 10000\n" +
+		"      egress_mbps: 10000\n" +
+		"      members: [{exporter: \"10.1.32.2\", ifindex: 999}]")
+	if _, err := Parse([]byte(bad)); err == nil || !strings.Contains(err.Error(), "interface 999") {
+		t.Errorf("Parse(invalid pool member) error = %v, want interface error", err)
+	}
+}
+
 func TestValidateBoundaryErrors(t *testing.T) {
 	cases := []struct {
 		name, block, wantErr string

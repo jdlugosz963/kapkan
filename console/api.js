@@ -20,7 +20,7 @@
   var cache = {
     status: { dry_run: false, uptime_seconds: 0, active_attacks: 0, active_bans: 0,
       hostgroups: [], networks: [], thresholds: null, role: "viewer",
-      dataplane_dry_run: false, dataplane: null, docs_url: "" },
+      dataplane_dry_run: false, dataplane: null, docs_url: "", upstream_capacity_pools: [] },
     attacks: { active: [], recent: [] },
     hosts: [],
     bansActive: [],
@@ -283,6 +283,7 @@
         role: status.role || "operator",
         unscoped: !!status.unscoped,
         docs_url: status.docs_url || "",
+        upstream_capacity_pools: status.upstream_capacity_pools || [],
         /* Settings view fields (admin-only ones are absent for scoped tokens) */
         version: status.version || "",
         /* update availability (opt-in update check; false/empty when disabled) */
@@ -499,6 +500,16 @@
       return b.mbps - a.mbps || a.key.localeCompare(b.key);
     });
     }
+  function capacityPools(source, direction) {
+  return (cache.status.upstream_capacity_pools || []).map(function (pool) {
+    var capacity = direction === "in" ? pool.ingress_mbps : pool.egress_mbps;
+    var mbps = (pool.upstreams || []).reduce(function (total, key) {
+    var upstream = source[key];
+    return total + (upstream ? upstream.mbps : 0);
+    }, 0);
+    return { name: pool.name, mbps: mbps, capacity_mbps: capacity, fraction: capacity > 0 ? mbps / capacity : 0 };
+  });
+  }
       cache.hosts.forEach(function (hHost) {
         inM += hHost.rates.mbps || 0; inP += hHost.rates.pps || 0;
         outM += hHost.out_rates.mbps || 0; outP += hHost.out_rates.pps || 0;
@@ -507,7 +518,8 @@
       });
     return {
     in_mbps: inM, out_mbps: outM, in_pps: inP, out_pps: outP,
-    in_upstreams: sortedUpstreams(inUpstreams), out_upstreams: sortedUpstreams(outUpstreams)
+  in_upstreams: sortedUpstreams(inUpstreams), out_upstreams: sortedUpstreams(outUpstreams),
+  in_capacity_pools: capacityPools(inUpstreams, "in"), out_capacity_pools: capacityPools(outUpstreams, "out")
     };
     },
 

@@ -1036,6 +1036,41 @@
         "default_rate": {
           "minimum": 1,
           "type": "integer"
+        },
+        "upstream_capacity_pools": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "egress_mbps": {
+                "type": "integer"
+              },
+              "ingress_mbps": {
+                "type": "integer"
+              },
+              "members": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "exporter": {
+                      "type": "string"
+                    },
+                    "ifindex": {
+                      "type": "integer"
+                    }
+                  },
+                  "type": "object"
+                },
+                "type": "array",
+                "x-optional": true
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "type": "array",
+          "x-optional": true
         }
       },
       "type": "object"

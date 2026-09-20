@@ -62,14 +62,28 @@
     ]);
     }));
   }
-  function card(labelKey, dirColor, vals, now, color, upstreams, total) {
+  function capacityBars(list, color) {
+    if (!list || !list.length) return null;
+    return h("div", { class: "upstream-bars" }, list.map(function (pool) {
+      return h("div", { class: "upstream-bar" }, [
+        h("span", { class: "upstream-bar__key", text: pool.name }),
+        h("span", { class: "upstream-bar__rate", text: I.mbps(pool.mbps) + " / " + I.mbps(pool.capacity_mbps) }),
+        h("span", { class: "upstream-bar__pct", text: I.pct(pool.fraction) }),
+        h("progress", { class: "upstream-bar__track " + (color === "var(--chart-out)" ? "is-egress" : "is-ingress"), attrs: {
+          max: "100", value: String(Math.min(100, pool.fraction * 100)), "aria-label": pool.name + " " + I.pct(pool.fraction)
+        } })
+      ]);
+    }));
+  }
+  function card(labelKey, dirColor, vals, now, color, upstreams, total, pools) {
       return h("div", { class: "tcard" }, [
         h("div", { class: "tcard__head" }, [
           h("div", { class: "tcard__label" }, [(function () { var d = h("span", { class: "tcard__dir" }); d.style.background = dirColor; return d; })(), h("span", { text: I.t(labelKey) })]),
           h("div", { class: "tcard__now" }, [now, " ", h("small", { text: I.t("ov.now") })])
         ]),
 		h("div", { class: "tcard__chart" }, K.areaChart(vals.length ? vals : [0, 0], { color: color, markerFrac: markerFrac })),
-		upstreamBars(upstreams, total, color)
+    upstreamBars(upstreams, total, color),
+    capacityBars(pools, color)
       ]);
     }
     return h("div", { class: "card" }, [
@@ -78,8 +92,8 @@
         markerFrac != null ? K.badge("badge--active", I.t("ov.attackwindow"), "alert") : null
       ]),
       h("div", { class: "card__body" }, h("div", { class: "traffic-strip" }, [
-		card("ov.ingress", "var(--chart-in)", ctx.buf.aggIn, I.mbps(agg.in_mbps), "var(--chart-in)", agg.in_upstreams, agg.in_mbps),
-		card("ov.egress", "var(--chart-out)", ctx.buf.aggOut, I.mbps(agg.out_mbps), "var(--chart-out)", agg.out_upstreams, agg.out_mbps)
+    card("ov.ingress", "var(--chart-in)", ctx.buf.aggIn, I.mbps(agg.in_mbps), "var(--chart-in)", agg.in_upstreams, agg.in_mbps, agg.in_capacity_pools),
+    card("ov.egress", "var(--chart-out)", ctx.buf.aggOut, I.mbps(agg.out_mbps), "var(--chart-out)", agg.out_upstreams, agg.out_mbps, agg.out_capacity_pools)
       ]))
     ]);
   }
