@@ -150,8 +150,8 @@ func TestEnsureSchemaAttemptsEverything(t *testing.T) {
 		if got := rec.count("CREATE TABLE IF NOT EXISTS kapkan.edge_"); got != 3 {
 			t.Fatalf("edge CREATEs attempted = %d, want 3", got)
 		}
-		if got := rec.count("ALTER TABLE kapkan.attack_events ADD COLUMN IF NOT EXISTS"); got != 3 {
-			t.Fatalf("ALTERs attempted = %d, want 3", got)
+		if got := rec.count("ALTER TABLE kapkan.attack_events ADD COLUMN IF NOT EXISTS"); got != 4 {
+			t.Fatalf("ALTERs attempted = %d, want 4", got)
 		}
 		rec.mu.Lock()
 		last := rec.stmts[len(rec.stmts)-1]
@@ -172,8 +172,8 @@ func TestEnsureSchemaAttemptsEverything(t *testing.T) {
 		if got := rec.count("CREATE TABLE IF NOT EXISTS kapkan."); got != 6 {
 			t.Fatalf("CREATE TABLEs attempted = %d, want all 6", got)
 		}
-		if got := rec.count("ALTER TABLE"); got != 3 {
-			t.Fatalf("ALTERs attempted after a refused core CREATE = %d, want 3", got)
+		if got := rec.count("ALTER TABLE"); got != 4 {
+			t.Fatalf("ALTERs attempted after a refused core CREATE = %d, want 4", got)
 		}
 	})
 }

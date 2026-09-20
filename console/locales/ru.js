@@ -120,6 +120,8 @@ activeAttacks: { one: "# активная атака", few: "# активные 
       "ac.topsources": "Топ источников",
       "ac.topdest": "Топ назначений",
       "ac.topasns": "Топ AS",
+      "ac.ingressupstreams": "Входящие апстримы",
+      "ac.egressupstreams": "Исходящие апстримы",
       "ac.topdestasns": "Топ AS назначения",
       "ac.topsrcports": "Топ исходящих портов",
       "ac.topdstports": "Топ портов назначения",

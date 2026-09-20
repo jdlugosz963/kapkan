@@ -102,9 +102,10 @@ type AttackRow struct {
 	// encoding, not a constraint; unknown values cost nothing and insert fine.
 	Method     string `json:"method"`
 	DryRun     uint8  `json:"dry_run"`
-	TopSources string `json:"top_sources"` // comma-joined for quick reading
-	TopASNs    string `json:"top_asns"`    // pipe-joined "AS<n> <org>" (orgs may contain commas); empty when geoip off
-	Reason     string `json:"reason"`      // compact JSON of the detection Reason (why it fired); empty on attack_ended
+	TopSources string `json:"top_sources"`   // comma-joined for quick reading
+	TopASNs    string `json:"top_asns"`      // pipe-joined "AS<n> <org>" (orgs may contain commas); empty when geoip off
+	Upstreams  string `json:"top_upstreams"` // JSON array of sampling-corrected upstream counters
+	Reason     string `json:"reason"`        // compact JSON of the detection Reason (why it fired); empty on attack_ended
 }
 
 // AuditRow is one operator-attributed mutation persisted to the audit_events
@@ -362,7 +363,7 @@ func (c *ClickHouse) ensureSchema(ctx context.Context) error {
 			"attack_type LowCardinality(String), metric LowCardinality(String), "+
 			"rate Float64, threshold Float64, pps Float64, mbps Float64, flows_per_sec Float64, "+
 			"ban_state LowCardinality(String), method LowCardinality(String), dry_run UInt8, "+
-			"top_sources String, top_asns String, reason String"+
+			"top_sources String, top_asns String, top_upstreams String, reason String"+
 			") ENGINE = MergeTree() ORDER BY (event_time, target) "+
 			"TTL event_time + INTERVAL %d DAY", c.cfg.Database, tableAttacks, c.cfg.TTLDays),
 		fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s.%s ("+
@@ -432,7 +433,7 @@ var schemaUpgrades = []struct {
 	table string
 	cols  []string
 }{
-	{tableAttacks, []string{"top_asns String", "reason String", "method LowCardinality(String)"}},
+	{tableAttacks, []string{"top_asns String", "top_upstreams String", "reason String", "method LowCardinality(String)"}},
 }
 
 // post sends one request to ClickHouse and treats non-2xx as an error,

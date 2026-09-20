@@ -26,7 +26,8 @@ func TestAttackRowMapping(t *testing.T) {
 			Type: engine.AttackNTPAmplification, Confidence: 0.9, SrcPort: 123,
 		},
 		Sample: &engine.AttackSample{
-			TopSources: []engine.Counter{{Key: "198.51.100.7"}, {Key: "198.51.100.8"}},
+			TopSources:   []engine.Counter{{Key: "198.51.100.7"}, {Key: "198.51.100.8"}},
+			TopUpstreams: []engine.Counter{{Key: "Netia", Packets: 60000, Bytes: 1000}},
 		},
 	}
 	ban := &mitigate.Ban{State: mitigate.BanActive, DryRun: true}
@@ -46,6 +47,9 @@ func TestAttackRowMapping(t *testing.T) {
 	}
 	if r.TopSources != "198.51.100.7,198.51.100.8" {
 		t.Errorf("top_sources = %q, want comma-joined sources", r.TopSources)
+	}
+	if r.Upstreams != `[{"key":"Netia","packets":60000,"bytes":1000}]` {
+		t.Errorf("top_upstreams = %q", r.Upstreams)
 	}
 	if r.BanState != "active" || r.DryRun != 1 {
 		t.Errorf("ban_state/dry_run = %q/%d, want active/1", r.BanState, r.DryRun)

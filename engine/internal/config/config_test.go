@@ -1429,19 +1429,26 @@ func withBoundary(block string) string {
 }
 
 func TestBoundaryRate(t *testing.T) {
-	cfg, err := Parse([]byte(withBoundary(`
-  boundary:
-    - exporter: "10.1.32.2"
-      external_ifindexes: [100, 101]
-      egress_sampling: true
-    - exporter: "10.1.32.3"
-      external_ifindexes: [200]`)))
+	cfg, err := Parse([]byte(withBoundary("\n" +
+		"  boundary:\n" +
+		"    - exporter: \"10.1.32.2\"\n" +
+		"      external_ifindexes: [100, 101]\n" +
+		"      interface_labels: {100: \"Netia\", 101: \"Netia\"}\n" +
+		"      egress_sampling: true\n" +
+		"    - exporter: \"10.1.32.3\"\n" +
+		"      external_ifindexes: [200]")))
 	if err != nil {
 		t.Fatalf("Parse(boundary) error = %v", err)
 	}
 	ex2 := netip.MustParseAddr("10.1.32.2") // egress sampling
 	ex3 := netip.MustParseAddr("10.1.32.3") // no egress sampling
 	other := netip.MustParseAddr("10.9.9.9")
+	if label, ok := cfg.BoundaryLabel(ex2, 100); !ok || label != "Netia" {
+		t.Errorf("BoundaryLabel(ex2, 100) = (%q, %v), want (Netia, true)", label, ok)
+	}
+	if _, ok := cfg.BoundaryLabel(ex2, 999); ok {
+		t.Error("BoundaryLabel(ex2, 999) unexpectedly found")
+	}
 
 	// External interface on an egress-sampling exporter: counted, rate halved.
 	if r, ok := cfg.InboundRate(ex2, 100, 1000); !ok || r != 500 {
@@ -1489,6 +1496,8 @@ func TestValidateBoundaryErrors(t *testing.T) {
 		{"bad exporter ip", "\n  boundary:\n    - exporter: \"nope\"\n      external_ifindexes: [1]", "exporter"},
 		{"empty ifindexes", "\n  boundary:\n    - exporter: \"10.0.0.2\"\n      external_ifindexes: []", "external_ifindexes"},
 		{"duplicate exporter", "\n  boundary:\n    - exporter: \"10.0.0.2\"\n      external_ifindexes: [1]\n    - exporter: \"10.0.0.2\"\n      external_ifindexes: [2]", "duplicate"},
+		{"label for internal interface", "\n  boundary:\n    - exporter: \"10.0.0.2\"\n      external_ifindexes: [1]\n      interface_labels:\n        2: Netia", "interface_labels[2]"},
+		{"empty label", "\n  boundary:\n    - exporter: \"10.0.0.2\"\n      external_ifindexes: [1]\n      interface_labels:\n        1: \"  \"", "must not be empty"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

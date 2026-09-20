@@ -374,12 +374,14 @@ func TestPayloadMatchesPublishedSchema(t *testing.T) {
 			TCPFlags: 0x02, Fragment: true,
 			Bytes: 468, Packets: 1, SamplingRate: 1000,
 			SrcASN: 64500, SrcOrg: "Evil Corp", SrcCountry: "RU",
+			Exporter: "10.1.32.2", InIfIndex: 71, OutIfIndex: 10,
 		}},
-		TopSources:  []engine.Counter{{Key: "198.51.100.7", Packets: 1, Bytes: 468}},
-		TopSrcPorts: []engine.Counter{{Key: "123", Packets: 1, Bytes: 468}},
-		TopDstPorts: []engine.Counter{{Key: "53", Packets: 1, Bytes: 468}},
-		Protocols:   []engine.Counter{{Key: "udp", Packets: 1, Bytes: 468}},
-		TopASNs:     []engine.Counter{{Key: "AS64500 Evil Corp", Packets: 1, Bytes: 468}},
+		TopSources:   []engine.Counter{{Key: "198.51.100.7", Packets: 1, Bytes: 468}},
+		TopSrcPorts:  []engine.Counter{{Key: "123", Packets: 1, Bytes: 468}},
+		TopDstPorts:  []engine.Counter{{Key: "53", Packets: 1, Bytes: 468}},
+		Protocols:    []engine.Counter{{Key: "udp", Packets: 1, Bytes: 468}},
+		TopASNs:      []engine.Counter{{Key: "AS64500 Evil Corp", Packets: 1, Bytes: 468}},
+		TopUpstreams: []engine.Counter{{Key: "Netia", Packets: 1, Bytes: 468}},
 	}
 	ev.Classification = &engine.Classification{Type: engine.AttackNTPAmplification, Confidence: 0.9, SrcPort: 123}
 	n := New(storeFrom(t, yamlWith("")), discardLogger())

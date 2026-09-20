@@ -422,7 +422,9 @@ func (e *Engine) record(addr netip.Addr, dir int, f flow.Flow, rate uint64, epoc
 		c.packets[clFrag] += packets
 	}
 	if sh.ring != nil {
-		sh.ring[sh.pos] = sampleEntry{f: f, epoch: epoch, dir: int8(dir)}
+		sampled := f
+		sampled.SamplingRate = rate
+		sh.ring[sh.pos] = sampleEntry{f: sampled, epoch: epoch, dir: int8(dir)}
 		sh.pos++
 		if sh.pos == len(sh.ring) {
 			sh.pos = 0

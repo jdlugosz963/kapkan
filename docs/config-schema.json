@@ -1019,7 +1019,8 @@
                 },
                 "type": "array",
                 "x-optional": true
-              }
+              },
+              "interface_labels": {}
             },
             "type": "object"
           },

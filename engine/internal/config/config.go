@@ -181,6 +181,9 @@ type ExporterBoundary struct {
 	// interfaces (the uplinks/border ports where traffic enters/leaves the
 	// protected network).
 	ExternalIfindexes []uint32 `yaml:"external_ifindexes"`
+	// InterfaceLabels gives external interfaces operator-facing upstream names.
+	// Equal labels intentionally merge multiple links into one attribution bucket.
+	InterfaceLabels map[uint32]string `yaml:"interface_labels"`
 	// EgressSampling marks an exporter that also samples on egress (e.g.
 	// Arista `sflow sample output`), which makes every boundary-crossing
 	// packet appear twice. When true, the sampling rate of boundary-counted
@@ -191,6 +194,7 @@ type ExporterBoundary struct {
 // exporterBoundary is the resolved, lookup-ready form of one ExporterBoundary.
 type exporterBoundary struct {
 	external map[uint32]struct{}
+	labels   map[uint32]string
 	egress   bool
 }
 
@@ -3534,13 +3538,35 @@ func (c *Config) resolveBoundary() error {
 		for _, idx := range eb.ExternalIfindexes {
 			ext[idx] = struct{}{}
 		}
-		c.boundary[addr] = exporterBoundary{external: ext, egress: eb.EgressSampling}
+		labels := make(map[uint32]string, len(eb.InterfaceLabels))
+		for idx, label := range eb.InterfaceLabels {
+			if _, ok := ext[idx]; !ok {
+				return fmt.Errorf("sampling.boundary[%d] (%s): interface_labels[%d] is not listed in external_ifindexes", i, eb.Exporter, idx)
+			}
+			label = strings.TrimSpace(label)
+			if label == "" {
+				return fmt.Errorf("sampling.boundary[%d] (%s): interface_labels[%d] must not be empty", i, eb.Exporter, idx)
+			}
+			labels[idx] = label
+		}
+		c.boundary[addr] = exporterBoundary{external: ext, labels: labels, egress: eb.EgressSampling}
 	}
 	return nil
 }
 
 // BoundaryDebugEnabled reports whether the boundary-discovery metric is on.
 func (c *Config) BoundaryDebugEnabled() bool { return c.Sampling.BoundaryDebug }
+
+// BoundaryLabel returns the configured operator-facing label for one exporter
+// interface. The exporter is part of the key because ifIndex is router-local.
+func (c *Config) BoundaryLabel(exporter netip.Addr, iface uint32) (string, bool) {
+	b, ok := c.boundary[exporter.Unmap()]
+	if !ok {
+		return "", false
+	}
+	label, ok := b.labels[iface]
+	return label, ok
+}
 
 // InboundRate decides whether a sample from exporter arriving on input
 // interface inIf should be counted toward a protected destination, and at what

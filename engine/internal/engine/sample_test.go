@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/kapkan-io/kapkan/internal/config"
 	"github.com/kapkan-io/kapkan/internal/flow"
 	"github.com/kapkan-io/kapkan/internal/geoip"
 )
@@ -94,6 +95,52 @@ func TestAttackSampleAggregation(t *testing.T) {
 		if f.Dst != dst {
 			t.Errorf("sample flow dst = %q, want %q (only matching flows)", f.Dst, dst)
 		}
+	}
+}
+
+func TestAttackSampleUpstreamAggregation(t *testing.T) {
+	yaml := strings.Replace(baseYAML, "sampling:\n  default_rate: 1000", "sampling:\n"+
+		"  default_rate: 1000\n"+
+		"  boundary:\n"+
+		"    - exporter: \"10.1.32.2\"\n"+
+		"      external_ifindexes: [71, 72]\n"+
+		"      interface_labels: {71: \"Netia\", 72: \"NASK\"}", 1)
+	cfg, err := config.Parse([]byte(yaml))
+	if err != nil {
+		t.Fatalf("parse config: %v", err)
+	}
+	clk := newMockClock()
+	e := New(config.NewStore("", cfg), WithClock(clk.Now), WithWindow(1))
+	events := drain(e)
+	dst := "203.0.113.20"
+	exporter := netip.MustParseAddr("10.1.32.2")
+
+	for iface, packets := range map[uint32]uint64{71: 60, 72: 40} {
+		f := attackerFlow("198.51.100.7", dst, 123, 1000)
+		f.Exporter = exporter
+		f.InIf = iface
+		f.Packets = packets
+		e.Process(f)
+	}
+	runTick(e, clk)
+
+	var ev Event
+	select {
+	case ev = <-events:
+	case <-time.After(time.Second):
+		t.Fatal("no AttackStarted")
+	}
+	if ev.Sample == nil || len(ev.Sample.TopUpstreams) != 2 {
+		t.Fatalf("TopUpstreams = %+v, want two entries", ev.Sample)
+	}
+	if got := ev.Sample.TopUpstreams[0]; got.Key != "Netia" || got.Packets != 60000 {
+		t.Errorf("first upstream = %+v, want Netia with 60000 packets", got)
+	}
+	if got := ev.Sample.TopUpstreams[1]; got.Key != "NASK" || got.Packets != 40000 {
+		t.Errorf("second upstream = %+v, want NASK with 40000 packets", got)
+	}
+	if got := ev.Sample.Flows[0]; got.Exporter != exporter.String() || got.InIfIndex == 0 {
+		t.Errorf("sample flow interface metadata = %+v", got)
 	}
 }
 

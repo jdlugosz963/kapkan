@@ -62,6 +62,7 @@
 
       sample ? section("ac.sample", "target", h("div", {}, [
         h("div", { class: "shares" }, [
+          (sample.top_upstreams && sample.top_upstreams.length) ? K.shareGroup(I.t(isOut ? "ac.egressupstreams" : "ac.ingressupstreams"), sample.top_upstreams, { src: true, total: sample.total_packets, limit: 16 }) : null,
           K.shareGroup(I.t(isOut ? "ac.topdest" : "ac.topsources"), sample.top_sources, { src: true }),
           (sample.top_asns && sample.top_asns.length) ? K.shareGroup(I.t(isOut ? "ac.topdestasns" : "ac.topasns"), sample.top_asns, { src: true }) : null,
           K.shareGroup(I.t("ac.protocols"), sample.protocols, {}),

@@ -107,6 +107,9 @@
               "bytes": { "type": "integer" },
               "packets": { "type": "integer" },
               "sampling_rate": { "type": "integer" },
+              "exporter": { "type": "string", "description": "Flow exporter address." },
+              "in_ifindex": { "type": "integer", "description": "Exporter-local input interface index." },
+              "out_ifindex": { "type": "integer", "description": "Exporter-local output interface index." },
               "src_asn": { "type": "integer", "description": "Source autonomous system number; present only when a GeoIP ASN database is configured and the source resolved." },
               "src_org": { "type": "string", "description": "Source AS organization name; present only with GeoIP ASN attribution." },
               "src_country": { "type": "string", "description": "Source ISO 3166-1 alpha-2 country code; present only when a GeoIP country database is configured and the source resolved." }
@@ -120,6 +123,10 @@
         "top_asns": {
           "$ref": "#/$defs/counters",
           "description": "Dominant source autonomous systems by sampling-corrected packets ('from which AS'). Present only when a GeoIP ASN database is configured; keys are 'AS<num> <org>' (or 'unknown' for sources the database could not place)."
+        },
+        "top_upstreams": {
+          "$ref": "#/$defs/counters",
+          "description": "Dominant boundary upstream labels by sampling-corrected packets. Unlabelled interfaces use exporter:ifIndex."
         },
         "total_packets": {
           "type": "integer",

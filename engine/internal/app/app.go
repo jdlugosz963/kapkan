@@ -461,6 +461,11 @@ func attackRow(ev engine.Event, ban *mitigate.Ban) storage.AttackRow {
 		// ("DigitalOcean, LLC"), which would make a comma-joined field
 		// ambiguous to split.
 		r.TopASNs = strings.Join(asns, " | ")
+		if len(ev.Sample.TopUpstreams) > 0 {
+			if data, err := json.Marshal(ev.Sample.TopUpstreams); err == nil {
+				r.Upstreams = string(data)
+			}
+		}
 	}
 	if ban != nil {
 		r.BanState = string(ban.State)

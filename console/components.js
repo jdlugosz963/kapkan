@@ -432,8 +432,8 @@
   /* ---------- share bars (sample) ---------- */
   function shareGroup(title, list, opts) {
     opts = opts || {};
-    var total = list.reduce(function (s, x) { return s + (x.packets || 1); }, 0);
-    var rows = list.slice(0, 5).map(function (x) {
+    var total = opts.total || list.reduce(function (s, x) { return s + (x.packets || 1); }, 0);
+    var rows = list.slice(0, opts.limit || 5).map(function (x) {
       var pct = (x.packets || 1) / total;
       var bar = h("i"); bar.style.width = Math.max(2, pct * 100) + "%";
       return h("div", { class: "share" }, [
