@@ -20,7 +20,7 @@
   var cache = {
     status: { dry_run: false, uptime_seconds: 0, active_attacks: 0, active_bans: 0,
       hostgroups: [], networks: [], thresholds: null, role: "viewer",
-      dataplane_dry_run: false, dataplane: null },
+      dataplane_dry_run: false, dataplane: null, docs_url: "" },
     attacks: { active: [], recent: [] },
     hosts: [],
     bansActive: [],
@@ -282,6 +282,7 @@
         thresholds: status.thresholds || null,
         role: status.role || "operator",
         unscoped: !!status.unscoped,
+        docs_url: status.docs_url || "",
         /* Settings view fields (admin-only ones are absent for scoped tokens) */
         version: status.version || "",
         /* update availability (opt-in update check; false/empty when disabled) */
