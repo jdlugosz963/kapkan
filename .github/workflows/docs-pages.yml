@@ -38,7 +38,7 @@ jobs:
       - name: Build static documentation
         working-directory: site/frontend
         env:
-          NEXT_BASE_PATH: ${{ steps.pages.outputs.base_path }}
+          NEXT_BASE_PATH: ""
         run: npm run build && npm run check-links
       - uses: actions/upload-pages-artifact@v3
         with:
