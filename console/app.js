@@ -172,6 +172,9 @@
     document.querySelector("#liveInd .live__txt").textContent = I.t("live.label");
     document.getElementById("liveInd").classList.add("is-polling");
 
+    var docs = document.getElementById("docsLink");
+    docs.textContent = I.t("btn.docs");
+
     /* locale menu */
     buildLocaleMenu();
 
@@ -210,6 +213,11 @@
   function renderShellDynamic(ctx) {
     K.mount(document.getElementById("posturePill"), K.posturePill(ctx.posture));
     K.mount(document.getElementById("modeBadge"), K.modeBadge(ctx.status.dry_run));
+
+    var docs = document.getElementById("docsLink");
+    var docsURL = ctx.status.docs_url || "";
+    docs.hidden = !docsURL;
+    if (docsURL) docs.href = docsURL.replace(/\/+$/, "") + "/" + I.locale + "/docs/";
 
     var counters = K.clear(document.getElementById("counters"));
     var defs = [

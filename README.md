@@ -21,6 +21,9 @@ is logged and exposed via the API but never announced to your routers.
 The full user documentation — every config key, the deployment guides, the data plane and
 the network-integration lab — lives at **[kapkan.io/docs](https://kapkan.io/docs)**
 (English, Russian, German, French, Spanish). This README is the engine's own reference.
+The fork's configurable detection window, upstream attribution and operator views are covered in
+the [traffic attribution guide](docs/en/traffic-attribution.mdx), which links back to the relevant
+upstream reference pages.
 
 ## Features
 

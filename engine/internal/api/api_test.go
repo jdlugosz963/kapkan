@@ -207,6 +207,19 @@ func TestStatusEndpoint(t *testing.T) {
 	if resp["dry_run"] != true {
 		t.Errorf("dry_run = %v, want true", resp["dry_run"])
 	}
+	if resp["docs_url"] != "" {
+		t.Errorf("docs_url = %v, want empty by default", resp["docs_url"])
+	}
+
+	withDocs := strings.Replace(apiYAML, "  listen: \"127.0.0.1:8080\"\n", "  listen: \"127.0.0.1:8080\"\n  docs_url: \"https://docs.example.test/kapkan\"\n", 1)
+	withDocsServer := testServer(t, storeFromYAML(t, withDocs))
+	withDocsResp := do(t, withDocsServer.Handler(), http.MethodGet, "/api/v1/status", "")
+	if err := json.Unmarshal(withDocsResp.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp["docs_url"] != "https://docs.example.test/kapkan" {
+		t.Errorf("docs_url = %v, want configured URL", resp["docs_url"])
+	}
 }
 
 func TestHealthzReflectsReadiness(t *testing.T) {

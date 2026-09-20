@@ -1,0 +1,130 @@
+export const metadata = {
+  title: "Traffic-Zuordnung & Operatoransichten",
+  description:
+    "Erkennungsfenster und Upstream-Namen konfigurieren und Live-Anteile, Top-10-Hosts sowie Angriffszuordnung in Dashboard, API und Callbacks nutzen.",
+};
+
+# Traffic-Zuordnung & Operatoransichten
+
+Diese Seite beschreibt die Traffic-Erweiterungen dieses Forks. Sie ergänzt die ursprüngliche
+[Konfigurationsreferenz](/docs/configuration), das [Erkennungsmodell](/docs/detection), den
+[Dashboard-Leitfaden](/docs/dashboard), die [REST-API](/docs/api) und die
+[Benachrichtigungen](/docs/notifications). Für alle übrigen Kapkan-Funktionen bleiben diese Seiten
+maßgeblich.
+
+Der Fork ergänzt vier zusammengehörige Funktionen:
+
+- ein konfigurierbares Erkennungsfenster statt fest codierter fünf Sekunden;
+- Live-Aufteilung des Ingress- und Egress-Verkehrs nach Upstream in **Overview**;
+- getrennte **Top 10 hosts** für Ingress und Egress in **Overview**;
+- Upstream-Verteilung in Angriffdetails, REST-API und Callbacks.
+
+## Erkennungsfenster konfigurieren
+
+`detection_window_seconds` ist ein Top-Level-Schlüssel mit einem Ganzzahlwert von `1` bis `60`.
+Ohne Schlüssel bleibt der Standardwert `5` erhalten.
+
+```yaml
+detection_window_seconds: 15
+```
+
+Raten sind Mittelwerte pro Sekunde über dieses Fenster. Ein längeres Fenster glättet stoßweise
+NetFlow/IPFIX-Exporte, verzögert aber die Erkennung und verdünnt kurze Spitzen. Eine Änderung per
+Reload wird abgelehnt; danach muss Kapkan neu gestartet werden. Details stehen unter
+[Erkennung & Schwellenwerte](/docs/detection).
+
+## Grenzschnittstellen benennen
+
+Die Zuordnung verwendet Exporter-Adresse und Interface-Index. Ergänzen Sie in jedem
+`sampling.boundary`-Eintrag `interface_labels`:
+
+```yaml
+sampling:
+  default_rate: 1000
+  boundary:
+    - exporter: "192.0.2.10"
+      external_ifindexes: [13]
+      interface_labels:
+        13: "Transit A"
+      egress_sampling: false
+    - exporter: "192.0.2.20"
+      external_ifindexes: [66, 71, 72]
+      interface_labels:
+        66: "Transit A"
+        71: "Transit B"
+        72: "Internetknoten"
+      egress_sampling: false
+```
+
+Die Suche ist exporterbezogen; derselbe ifIndex darf auf verschiedenen Routern etwas anderes
+bedeuten. Gleiche Namen fassen dagegen mehrere Links oder Router zu einem Anteil zusammen. Jeder
+beschriftete ifIndex muss auch in `external_ifindexes` stehen. Ohne Namen erscheint
+`exporter:ifIndex`.
+
+<Callout type="info" title="Die Richtung ist entscheidend">
+Ingress wird über NetFlow/IPFIX `InIf`, Egress über `OutIf` zugeordnet. Egress-Raten und Ranglisten
+werden nur mit konfiguriertem `thresholds_outgoing` gefüllt. `egress_sampling` korrigiert eine
+separat gemessene Doppelzählung und wählt nicht die Anzeigerichtung. Siehe
+[Interface-Grenzzählung](/docs/configuration).
+</Callout>
+
+Sind die ifIndexes unbekannt, aktivieren Sie kurz `sampling.boundary_debug`, vergleichen Sie
+`kapkan_engine_boundary_debug_bytes_total` mit den Router-Zählern und deaktivieren Sie die Metrik
+danach wieder.
+
+## Anzeige in Overview
+
+**Aggregate traffic** summiert die aktuellen, sampling-korrigierten Host-Raten. Getrennte Ingress-
+und Egress-Balken zeigen Name, Mb/s und Anteil am sichtbaren Gesamtverkehr. Bis zu 16 Upstreams
+werden nach Mb/s sortiert angezeigt.
+
+Zwei **Top 10 hosts**-Karten sortieren jede Richtung getrennt nach Mb/s, danach PPS und schließlich
+IP-Adresse. Es sind Live-Snapshots aus dem Speicher; ClickHouse ist nicht erforderlich. Egress
+bleibt ohne `thresholds_outgoing` leer. Zugriff und Authentifizierung beschreibt das
+[Dashboard](/docs/dashboard).
+
+## REST-API
+
+`GET /api/v1/hosts` ergänzt jeden Host um optionale Arrays:
+
+| Feld | Richtung | Element |
+| --- | --- | --- |
+| `upstreams` | eingehend | `{ "key": string, "mbps": number, "pps": number }` |
+| `upstreams_out` | ausgehend | `{ "key": string, "mbps": number, "pps": number }` |
+
+Die Werte sind sampling-korrigierte, über `detection_window_seconds` gemittelte Raten. Das Dashboard
+summiert sie über die für das aktuelle Token sichtbaren Hosts. Das vollständige Objekt steht unter
+[GET `/api/v1/hosts`](/docs/api).
+
+## Angriffsberichte und Callbacks
+
+Bei aktivem Sampling enthalten `GET /api/v1/attacks`, die Angriffdetails sowie Webhook und Exec-Hook
+im Format `kapkan` das Feld `sample.top_upstreams`:
+
+```json
+{
+  "sample": {
+    "top_upstreams": [
+      { "key": "Transit B", "packets": 1263000, "bytes": 1542000000 },
+      { "key": "Transit A", "packets": 421000, "bytes": 489000000 }
+    ],
+    "total_packets": 1684000
+  }
+}
+```
+
+Dies sind sampling-korrigierte Zähler, keine Live-Raten. Der Paketanteil ist
+`item.packets / sample.total_packets`; der Nenner bleibt ungekürzt. Die Richtung bestimmt erneut
+`InIf` oder `OutIf`. Der versionierte Vertrag ist
+[Callback-Nutzlastschema](/docs/notifications); die maßgebliche Datei ist
+`docs/callback-schema.json` in diesem Repository.
+
+## Checkliste
+
+1. Grenzschnittstellen und Namen konfigurieren; identische Namen fassen Links zusammen.
+2. Für Egress-Sichtbarkeit `thresholds_outgoing` aktivieren.
+3. Mit `kapkan -check-config /etc/kapkan/config.yaml` validieren.
+4. Nach Änderung des Fensters neu starten; reine Namensänderungen dürfen `systemctl reload kapkan`
+   verwenden.
+5. `upstreams` und `upstreams_out` in `/api/v1/hosts` sowie beide Overview-Richtungen prüfen.
+6. Bei einem Testalarm `sample.top_upstreams` in API und Callback-Empfänger prüfen.

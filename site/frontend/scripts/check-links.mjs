@@ -14,6 +14,7 @@ import { readdirSync, readFileSync, statSync, existsSync } from "node:fs";
 import { join, resolve, posix } from "node:path";
 
 const exportDir = resolve(process.cwd(), process.argv[2] ?? "out");
+const basePath = (process.env.NEXT_BASE_PATH ?? "").replace(/\/$/, "");
 
 if (!existsSync(exportDir)) {
   console.error(`[check-links] export not found: ${exportDir} — run \`npm run build\` first.`);
@@ -85,7 +86,7 @@ function anchorsOf(relPath) {
 
 /** URL path a page is served at: out/en/docs/foo/index.html -> /en/docs/foo/ */
 function urlOf(relPath) {
-  return "/" + relPath.replace(/(^|\/)index\.html$/, "$1");
+  return basePath + "/" + relPath.replace(/(^|\/)index\.html$/, "$1");
 }
 
 /**
@@ -94,7 +95,10 @@ function urlOf(relPath) {
  * may point at a plain asset), so all three shapes are accepted.
  */
 function resolveTarget(urlPath) {
-  const clean = urlPath.replace(/^\/+/, "");
+  const rooted = basePath && (urlPath === basePath || urlPath.startsWith(basePath + "/"))
+    ? urlPath.slice(basePath.length)
+    : urlPath;
+  const clean = rooted.replace(/^\/+/, "");
   if (clean === "") return "index.html";
   const candidates = clean.endsWith("/")
     ? [clean + "index.html"]

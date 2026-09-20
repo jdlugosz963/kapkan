@@ -363,6 +363,14 @@
       ]))
     ]);
 
+    var docsCard = s.docs_url ? h("div", { class: "card" }, [
+      h("div", { class: "card__head" }, h("div", { class: "card__title" }, [w.icon("external"), h("span", { text: I.t("se.docs") })])),
+      h("div", { class: "card__body row between wrap" }, [
+        h("p", { class: "td-muted", text: I.t("se.docs.desc") }),
+        h("a", { class: "btn btn--ghost", href: s.docs_url.replace(/\/+$/, "") + "/" + I.locale + "/docs/", target: "_blank", rel: "noopener" }, [w.icon("external"), h("span", { text: I.t("btn.docs") })])
+      ])
+    ]) : null;
+
     var netCard = h("div", { class: "card" }, [
       h("div", { class: "card__head" }, [h("div", { class: "card__title" }, [w.icon("globe"), h("span", { text: I.t("se.networks") })]), K.badge("badge--muted", I.t("se.adminonly"), "lock")]),
       h("div", { class: "card__body" }, h("div", { class: "row wrap" }, ctx.networks.map(function (n) { return K.badge("badge--accent", n); })))
@@ -417,7 +425,8 @@
     K.mount(root, [
       V.viewHead(I.t("nav.settings"), null),
       h("div", { class: "banner banner--info" }, [w.icon("lock"), h("span", { class: "banner__txt", text: I.t("se.readonly") })]),
-      h("div", { class: "cols-2" }, [statusCard, netCard]),
+      h("div", { class: "cols-2" }, [statusCard, docsCard || netCard]),
+      docsCard ? h("div", { class: "mt-4" }, netCard) : null,
       h("div", { class: "cols-2 mt-4" }, [thrCard, bgpCard]),
       h("div", { class: "mt-4" }, dpCard),
       h("div", { class: "mt-4" }, reloadCard)

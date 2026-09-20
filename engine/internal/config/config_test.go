@@ -897,6 +897,35 @@ func TestAPIDashboardAndToken(t *testing.T) {
 	}
 }
 
+func TestAPIDocsURL(t *testing.T) {
+	for _, tc := range []struct {
+		name, value, wantErr string
+	}{
+		{"https", "https://docs.example.test/kapkan/docs", ""},
+		{"http", "http://127.0.0.1:4173/docs", ""},
+		{"relative", "/docs", "api.docs_url"},
+		{"non-http", "ftp://docs.example.test", "api.docs_url"},
+		{"credentials", "https://user:pass@docs.example.test", "api.docs_url"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			yaml := strings.Replace(validYAML, "  listen: \"127.0.0.1:8080\"\n", "  listen: \"127.0.0.1:8080\"\n  docs_url: \""+tc.value+"\"\n", 1)
+			cfg, err := Parse([]byte(yaml))
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("Parse() error = %v, want %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Parse() error = %v", err)
+			}
+			if cfg.API.DocsURL != tc.value {
+				t.Errorf("DocsURL = %q, want %q", cfg.API.DocsURL, tc.value)
+			}
+		})
+	}
+}
+
 func TestStorageResolution(t *testing.T) {
 	// Absent: disabled.
 	cfg, err := Parse([]byte(validYAML))

@@ -681,6 +681,9 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"active_attacks": activeAttacks,
 		"active_bans":    activeBans,
 		"hostgroups":     groups,
+		// docs_url is public documentation metadata, not deployment topology;
+		// all roles need it so the console can offer the same help link.
+		"docs_url": cfg.API.DocsURL,
 		// role lets the dashboard gate operator-only affordances; unscoped marks
 		// an admin token (which also receives networks/thresholds below).
 		"role":     string(c.role),

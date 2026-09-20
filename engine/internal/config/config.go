@@ -1284,6 +1284,11 @@ type API struct {
 	// Dashboard serves the embedded web UI on the API listener. Defaults to
 	// true; set false to expose only the JSON API and metrics.
 	Dashboard *bool `yaml:"dashboard"`
+	// DocsURL is the absolute public base URL of this deployment's documentation
+	// site. When set, the console appends /<locale>/docs/ to open the matching
+	// language; an empty value hides the link rather than pointing a fork at an
+	// unrelated documentation site.
+	DocsURL string `yaml:"docs_url"`
 	// TokenEnv names an environment variable holding a bearer token. When
 	// set, every /api/v1 request must carry "Authorization: Bearer <token>".
 	// The token is read from the environment, never from the config file.
@@ -1806,6 +1811,12 @@ func (c *Config) validate() error {
 	}
 	if _, err := netip.ParseAddrPort(normalizeListen(c.API.Listen)); err != nil {
 		return fmt.Errorf("api.listen: invalid address %q: %w", c.API.Listen, err)
+	}
+	if c.API.DocsURL != "" {
+		parsed, err := url.ParseRequestURI(c.API.DocsURL)
+		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.User != nil {
+			return fmt.Errorf("api.docs_url must be an absolute http(s) URL without credentials, got %q", c.API.DocsURL)
+		}
 	}
 	if err := c.validateEdgeScope(); err != nil {
 		return err

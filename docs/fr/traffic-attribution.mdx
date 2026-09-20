@@ -1,0 +1,127 @@
+export const metadata = {
+  title: "Attribution du trafic et vues opérateur",
+  description:
+    "Configurer la fenêtre de détection et les libellés upstream, puis exploiter les parts en direct, le Top 10 et l'attribution des attaques.",
+};
+
+# Attribution du trafic et vues opérateur
+
+Cette page décrit les extensions de visibilité de ce fork. Elle complète la
+[référence de configuration](/docs/configuration), le modèle de
+[détection](/docs/detection), le [tableau de bord](/docs/dashboard), l'[API REST](/docs/api) et
+les [notifications](/docs/notifications), qui restent les références pour le reste de Kapkan.
+
+Le fork ajoute quatre fonctions liées :
+
+- une fenêtre de détection configurable au lieu de cinq secondes codées en dur ;
+- la répartition en direct du trafic entrant et sortant par upstream dans **Overview** ;
+- deux classements **Top 10 hosts**, entrant et sortant, dans **Overview** ;
+- la répartition par upstream dans les attaques, l'API REST et les callbacks.
+
+## Configurer la fenêtre de détection
+
+La clé racine `detection_window_seconds` accepte un entier de `1` à `60`. Sa valeur par défaut reste
+`5`, donc son absence conserve le comportement historique.
+
+```yaml
+detection_window_seconds: 15
+```
+
+Les débits sont des moyennes par seconde sur cette fenêtre. Une fenêtre plus longue lisse les
+exports NetFlow/IPFIX groupés, mais retarde la détection et atténue les pointes courtes. Sa
+modification par rechargement est refusée : redémarrez Kapkan. Voir
+[Détection et seuils](/docs/detection).
+
+## Nommer les interfaces de bordure
+
+L'attribution utilise l'adresse de l'exporteur et son index d'interface. Ajoutez
+`interface_labels` à chaque entrée `sampling.boundary` :
+
+```yaml
+sampling:
+  default_rate: 1000
+  boundary:
+    - exporter: "192.0.2.10"
+      external_ifindexes: [13]
+      interface_labels:
+        13: "Transit A"
+      egress_sampling: false
+    - exporter: "192.0.2.20"
+      external_ifindexes: [66, 71, 72]
+      interface_labels:
+        66: "Transit A"
+        71: "Transit B"
+        72: "Point d'échange"
+      egress_sampling: false
+```
+
+La recherche est limitée à l'exporteur : un même ifIndex peut désigner autre chose sur deux
+routeurs. À l'inverse, des libellés identiques fusionnent volontairement plusieurs liens ou
+routeurs. Chaque ifIndex nommé doit figurer dans `external_ifindexes`. Sans libellé, la clé affichée
+est `exporter:ifIndex`.
+
+<Callout type="info" title="Le sens compte">
+Le trafic entrant est attribué avec `InIf` de NetFlow/IPFIX, le trafic sortant avec `OutIf`. Les
+débits et classements sortants ne sont alimentés que si `thresholds_outgoing` est configuré.
+`egress_sampling` corrige un double comptage mesuré séparément ; il ne choisit pas le sens affiché.
+Voir le [comptage aux interfaces de bordure](/docs/configuration).
+</Callout>
+
+Si les ifIndexes sont inconnus, activez temporairement `sampling.boundary_debug`, comparez
+`kapkan_engine_boundary_debug_bytes_total` aux compteurs du routeur, puis désactivez cette métrique.
+
+## Affichage dans Overview
+
+**Aggregate traffic** additionne les débits courants corrigés de l'échantillonnage. Les barres
+entrantes et sortantes indiquent le libellé, les Mb/s et la part du total visible. Jusqu'à 16
+upstreams sont affichés, triés par Mb/s.
+
+Les deux cartes **Top 10 hosts** classent chaque sens indépendamment par Mb/s, puis PPS et enfin
+adresse IP. Ce sont des instantanés en mémoire ; ClickHouse n'est pas nécessaire. Le classement
+sortant reste vide sans `thresholds_outgoing`. Voir le [Tableau de bord](/docs/dashboard).
+
+## API REST
+
+`GET /api/v1/hosts` ajoute deux tableaux facultatifs à chaque hôte :
+
+| Champ | Sens | Élément |
+| --- | --- | --- |
+| `upstreams` | entrant | `{ "key": string, "mbps": number, "pps": number }` |
+| `upstreams_out` | sortant | `{ "key": string, "mbps": number, "pps": number }` |
+
+Ces valeurs sont corrigées de l'échantillonnage, moyennées sur `detection_window_seconds` et triées
+par Mb/s. Le tableau de bord les additionne pour les hôtes visibles par le jeton courant. Voir
+[GET `/api/v1/hosts`](/docs/api).
+
+## Rapports d'attaque et callbacks
+
+Avec l'échantillonnage d'attaque actif, `GET /api/v1/attacks`, le détail d'attaque, le webhook et le
+hook exec au format `kapkan` exposent `sample.top_upstreams` :
+
+```json
+{
+  "sample": {
+    "top_upstreams": [
+      { "key": "Transit B", "packets": 1263000, "bytes": 1542000000 },
+      { "key": "Transit A", "packets": 421000, "bytes": 489000000 }
+    ],
+    "total_packets": 1684000
+  }
+}
+```
+
+Ce sont des compteurs corrigés, pas des débits en direct. La part en paquets vaut
+`item.packets / sample.total_packets` et le dénominateur n'est pas tronqué. Le sens choisit `InIf`
+ou `OutIf`. Le contrat versionné est
+[Schéma de la charge utile callback](/docs/notifications) ; sa définition
+de référence est `docs/callback-schema.json` dans ce dépôt.
+
+## Liste de déploiement
+
+1. Configurer les interfaces et libellés ; un libellé identique fusionne plusieurs liens.
+2. Activer `thresholds_outgoing` si la visibilité sortante est requise.
+3. Valider avec `kapkan -check-config /etc/kapkan/config.yaml`.
+4. Redémarrer après un changement de fenêtre ; un changement de libellés seul peut utiliser
+   `systemctl reload kapkan`.
+5. Vérifier `upstreams`, `upstreams_out` et les deux sens dans Overview.
+6. Pendant une alerte de test, vérifier `sample.top_upstreams` dans l'API et le récepteur callback.

@@ -1,0 +1,158 @@
+export const metadata = {
+  title: "Traffic attribution & operator views",
+  description:
+    "Configure the detection window and upstream labels, then use live upstream shares, Top 10 hosts and attack attribution in the dashboard, API and callbacks.",
+};
+
+# Traffic attribution & operator views
+
+This page documents the traffic-visibility extensions carried by this fork. It complements the
+upstream [configuration reference](/docs/configuration), [detection model](/docs/detection),
+[dashboard guide](/docs/dashboard), [REST API](/docs/api) and
+[notification callbacks](/docs/notifications); those pages remain authoritative for the rest of
+Kapkan.
+
+The extensions add four related capabilities:
+
+- a configurable sliding detection window instead of a fixed five-second window;
+- live ingress and egress traffic split by upstream on **Overview**;
+- separate ingress and egress **Top 10 hosts** rankings on **Overview**;
+- upstream distribution in attack details, the REST API and notification callbacks.
+
+## Configure the detection window
+
+Set the top-level `detection_window_seconds` key to an integer from `1` to `60`. The default remains
+`5`, so existing installations keep their previous behavior when the key is absent.
+
+```yaml
+detection_window_seconds: 15
+```
+
+Rates are per-second averages over this window. A longer window smooths NetFlow/IPFIX exporters
+that deliver records in bursts, but delays detection and dilutes short spikes. This setting fixes
+the engine's ring size at startup: changing it through config reload is rejected, so restart Kapkan
+after changing it. See [Detection & thresholds](/docs/detection) for threshold semantics.
+
+## Name boundary interfaces
+
+Upstream attribution uses the exporter address together with its interface index. Add
+`interface_labels` to each `sampling.boundary` entry and map external ifIndexes to stable,
+operator-facing names:
+
+```yaml
+sampling:
+  default_rate: 1000
+  boundary:
+    - exporter: "192.0.2.10"
+      external_ifindexes: [13]
+      interface_labels:
+        13: "Transit A"
+      egress_sampling: false
+
+    - exporter: "192.0.2.20"
+      external_ifindexes: [66, 71, 72]
+      interface_labels:
+        66: "Transit A"
+        71: "Transit B"
+        72: "Internet exchange"
+      egress_sampling: false
+```
+
+The lookup is scoped by exporter, so the same ifIndex may have different meanings on different
+routers. Conversely, equal labels intentionally merge several interfaces or routers into one
+upstream share. Every labeled ifIndex must also appear in that entry's `external_ifindexes`.
+An unlabeled external interface is still reported, using `exporter:ifIndex` as its key.
+
+<Callout type="info" title="Direction matters">
+Incoming traffic is attributed with NetFlow/IPFIX `InIf`; outgoing traffic uses `OutIf`.
+Outgoing rates and rankings are populated only when `thresholds_outgoing` is configured. The
+`egress_sampling` switch corrects a separately observed double-counting pattern; it does not select
+the displayed direction. Calibrate it as described under
+[interface-boundary counting](/docs/configuration#sampling-correction).
+</Callout>
+
+If the router's ifIndexes are not known, temporarily enable `sampling.boundary_debug`, inspect
+`kapkan_engine_boundary_debug_bytes_total` by exporter and interface, compare it with router
+interface counters, then disable the debug metric. It is deliberately not cardinality-bounded.
+
+## What Overview shows
+
+The **Aggregate traffic** card sums the current sampling-corrected host rates and displays separate
+ingress and egress upstream bars. Each row contains the label, current Mb/s and its percentage of
+the visible direction total. Up to 16 upstreams are shown, ordered by Mb/s.
+
+The two **Top 10 hosts** cards rank ingress and egress independently. Ordering is Mb/s descending,
+then PPS descending, then IP address for stable ties. These are live in-memory snapshots, not
+historical reports; ClickHouse is not required. Egress stays empty until outgoing detection is
+enabled. See [Dashboard](/docs/dashboard) for access and authentication.
+
+## REST API fields
+
+`GET /api/v1/hosts` adds two optional arrays to each host:
+
+| Field | Direction | Item shape |
+| --- | --- | --- |
+| `upstreams` | incoming | `{ "key": string, "mbps": number, "pps": number }` |
+| `upstreams_out` | outgoing | `{ "key": string, "mbps": number, "pps": number }` |
+
+Values are sampling-corrected rates averaged over `detection_window_seconds` and sorted by Mb/s.
+The dashboard aggregates these arrays across the hosts visible to the current token.
+
+```json
+{
+  "target": "203.0.113.66",
+  "rates": { "mbps": 812.4, "pps": 68400 },
+  "upstreams": [
+    { "key": "Transit B", "mbps": 501.8, "pps": 42100 },
+    { "key": "Transit A", "mbps": 310.6, "pps": 26300 }
+  ],
+  "rates_out": { "mbps": 0, "pps": 0 }
+}
+```
+
+See [GET `/api/v1/hosts`](/docs/api#get-apiv1hosts) for the complete host object and authentication
+rules.
+
+## Attack reports and callbacks
+
+When attack sampling is enabled, `GET /api/v1/attacks` and the attack detail view expose
+`sample.top_upstreams`. Webhook bodies and the `kapkan`-format exec hook carry the same field in an
+`attack_started` event:
+
+```json
+{
+  "sample": {
+    "top_upstreams": [
+      { "key": "Transit B", "packets": 1263000, "bytes": 1542000000 },
+      { "key": "Transit A", "packets": 421000, "bytes": 489000000 }
+    ],
+    "total_packets": 1684000
+  }
+}
+```
+
+Unlike the live host arrays, attack entries are sampled counters, not rates. `packets` and `bytes`
+are sampling-corrected totals captured around detection. Calculate a displayed packet share as
+`item.packets / sample.total_packets`; `total_packets` is untruncated even when the top list omits
+small contributors. Attribution follows the attack direction: `InIf` for incoming attacks and
+`OutIf` for outgoing attacks. The versioned machine contract is
+[Callback payload schema](/docs/notifications#callback-payload-schema); the authoritative file is
+`docs/callback-schema.json` in this repository.
+
+## Rollout checklist
+
+1. Configure boundary interfaces and labels; use one exact label wherever links should merge.
+2. Enable `thresholds_outgoing` if egress visibility is required.
+3. Validate before applying: `kapkan -check-config /etc/kapkan/config.yaml`.
+4. Restart after changing `detection_window_seconds`; label-only changes may use
+   `systemctl reload kapkan`.
+5. Check `/api/v1/hosts` for `upstreams` and `upstreams_out`, then verify both Overview directions.
+6. During a test alert, check `sample.top_upstreams` in `/api/v1/attacks` and in the callback
+   receiver before relying on the attribution operationally.
+
+```sh
+curl -fsS localhost:8080/api/v1/hosts | jq '.hosts[0] | {upstreams, upstreams_out}'
+curl -fsS localhost:8080/api/v1/attacks | jq '.active[0].sample | {top_upstreams, total_packets}'
+```
+
+Add the bearer header shown in the [REST API guide](/docs/api) when authentication is enabled.

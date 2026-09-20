@@ -1,10 +1,15 @@
 import type { NextConfig } from "next";
 import createMDX from "@next/mdx";
 
+const basePath = (process.env.NEXT_BASE_PATH ?? "").replace(/\/$/, "");
+
 const nextConfig: NextConfig = {
   // Ship a fully static site: `next build` emits `out/` with one HTML file per
   // route. No Node runtime needed — nginx serves the files directly.
   output: "export",
+  // GitHub Pages project sites live below /<repository>. The deploy workflow
+  // supplies that prefix; local and kapkan.io builds stay rooted at "/".
+  basePath,
   // Emit `route/index.html` (not `route.html`) so the host's default
   // `try_files $uri $uri/ =404` resolves clean URLs without extra rewrites.
   trailingSlash: true,

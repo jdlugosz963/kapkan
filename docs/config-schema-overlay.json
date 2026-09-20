@@ -152,6 +152,7 @@
 
     "api.listen": { "tier": "basic", "format": "hostport", "reloadImmutable": true, "description": "REST API and metrics listen address (default 127.0.0.1:8080)." },
     "api.dashboard": { "tier": "basic", "defaultWhenAbsent": true, "description": "Serve the embedded web UI on the API listener." },
+    "api.docs_url": { "tier": "advanced", "format": "url", "description": "Absolute base URL of this deployment's documentation site. When set, the operator console opens the matching /<locale>/docs/ path." },
     "api.token_env": { "tier": "basic", "secret": true, "crossField": "Mutually exclusive with api.tokens. Required before exposing the listener beyond localhost.", "description": "Env var holding a single operator bearer token." },
     "api.tokens.name": { "tier": "advanced", "description": "Label for this role-based token." },
     "api.tokens.token_env": { "tier": "advanced", "secret": true, "description": "Env var holding this token's secret." },
