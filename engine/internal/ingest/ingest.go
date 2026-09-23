@@ -301,6 +301,8 @@ func convert(pm *protoproducer.ProtoProducerMessage, defaultRate uint64) (flow.F
 		SamplingRate: rate,
 		InIf:         pm.InIf,
 		OutIf:        pm.OutIf,
+		SrcVLAN:      pm.SrcVlan,
+		DstVLAN:      pm.DstVlan,
 		SrcPort:      uint16(pm.SrcPort),
 		DstPort:      uint16(pm.DstPort),
 		IPProto:      uint8(pm.Proto),

@@ -33,11 +33,11 @@ that deliver records in bursts, but delays detection and dilutes short spikes. T
 the engine's ring size at startup: changing it through config reload is rejected, so restart Kapkan
 after changing it. See [Detection & thresholds](/docs/detection) for threshold semantics.
 
-## Name boundary interfaces
+## Choose traffic attribution
 
-Upstream attribution uses the exporter address together with its interface index. Add
-`interface_labels` to each `sampling.boundary` entry and map external ifIndexes to stable,
-operator-facing names:
+Boundary filtering and display attribution are separate. Use `sampling.boundary` for
+external-interface filtering, deduplication, and excluding internal VLANs from accounting.
+Select the key shown in Overview with a top-level `attribution` block:
 
 ```yaml
 sampling:
@@ -45,23 +45,23 @@ sampling:
   boundary:
     - exporter: "192.0.2.10"
       external_ifindexes: [13]
-      interface_labels:
-        13: "Transit A"
+      excluded_vlans: [100, 200]
       egress_sampling: false
 
-    - exporter: "192.0.2.20"
-      external_ifindexes: [66, 71, 72]
-      interface_labels:
-        66: "Transit A"
-        71: "Transit B"
-        72: "Internet exchange"
-      egress_sampling: false
+attribution:
+  mode: vlan
+  vlans:
+    - exporter: "192.0.2.10"
+      vlan: 850
+      name: "Transit A"
 ```
 
-The lookup is scoped by exporter, so the same ifIndex may have different meanings on different
-routers. Conversely, equal labels intentionally merge several interfaces or routers into one
-upstream share. Every labeled ifIndex must also appear in that entry's `external_ifindexes`.
-An unlabeled external interface is still reported, using `exporter:ifIndex` as its key.
+In `interface` mode, map `exporter` and `ifindex` under `attribution.interfaces`. In `vlan`
+mode, map `exporter` and `vlan` under `attribution.vlans`. Entries are exporter-scoped. An
+unmapped interface is shown as `exporter:ifIndex`; an unmapped VLAN is shown as `VLAN <id>`.
+An `excluded_vlans` match against the same nonzero VLAN selected for display attribution discards
+the whole flow from host accounting and detection. `external_ifindexes` may be omitted for a
+VLAN-only boundary rule.
 
 <Callout type="info" title="Direction matters">
 Incoming traffic is attributed with NetFlow/IPFIX `InIf`; outgoing traffic uses `OutIf`.

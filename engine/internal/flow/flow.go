@@ -76,6 +76,8 @@ type Flow struct {
 	// interface-boundary counting (see config.Sampling.Boundary).
 	InIf    uint32
 	OutIf   uint32
+	SrcVLAN uint32
+	DstVLAN uint32
 	SrcPort uint16
 	DstPort uint16
 	// IPProto is the IP protocol number (6 TCP, 17 UDP, ...).

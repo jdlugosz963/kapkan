@@ -104,7 +104,8 @@ func TestAttackSampleUpstreamAggregation(t *testing.T) {
 		"  boundary:\n"+
 		"    - exporter: \"10.1.32.2\"\n"+
 		"      external_ifindexes: [71, 72]\n"+
-		"      interface_labels: {71: \"Netia\", 72: \"NASK\"}", 1)
+		"      egress_sampling: false", 1)
+	yaml = strings.Replace(yaml, "networks:", "attribution:\n  mode: interface\n  interfaces:\n    - {exporter: \"10.1.32.2\", ifindex: 71, name: \"Netia\"}\n    - {exporter: \"10.1.32.2\", ifindex: 72, name: \"NASK\"}\nnetworks:", 1)
 	cfg, err := config.Parse([]byte(yaml))
 	if err != nil {
 		t.Fatalf("parse config: %v", err)

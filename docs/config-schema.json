@@ -54,6 +54,53 @@
       },
       "type": "object"
     },
+    "attribution": {
+      "additionalProperties": false,
+      "properties": {
+        "interfaces": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "exporter": {
+                "type": "string"
+              },
+              "ifindex": {
+                "type": "integer"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "type": "array",
+          "x-optional": true
+        },
+        "mode": {
+          "type": "string"
+        },
+        "vlans": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "exporter": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "vlan": {
+                "type": "integer"
+              }
+            },
+            "type": "object"
+          },
+          "type": "array",
+          "x-optional": true
+        }
+      },
+      "type": "object"
+    },
     "ban": {
       "additionalProperties": false,
       "properties": {
@@ -1013,6 +1060,13 @@
               "egress_sampling": {
                 "type": "boolean"
               },
+              "excluded_vlans": {
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array",
+                "x-optional": true
+              },
               "exporter": {
                 "type": "string"
               },
@@ -1022,8 +1076,7 @@
                 },
                 "type": "array",
                 "x-optional": true
-              },
-              "interface_labels": {}
+              }
             },
             "type": "object"
           },
@@ -1055,6 +1108,9 @@
                       "type": "string"
                     },
                     "ifindex": {
+                      "type": "integer"
+                    },
+                    "vlan": {
                       "type": "integer"
                     }
                   },

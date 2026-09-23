@@ -427,8 +427,8 @@ func (e *Engine) Process(f flow.Flow) {
 				f.Exporter.String(), strconv.FormatUint(uint64(f.InIf), 10), "in",
 			).Add(float64(f.Bytes * rate))
 		}
-		if r, ok := cfg.InboundRate(f.Exporter, f.InIf, rate); ok {
-			e.record(f.DstAddr, dirIn, f, r, epoch, upstreamKey(cfg, f.Exporter, f.InIf))
+		if r, ok := cfg.InboundRate(f.Exporter, f.InIf, flowVLAN(&f), rate); ok {
+			e.record(f.DstAddr, dirIn, f, r, epoch, attributionKey(cfg, &f, f.InIf))
 		}
 	}
 	if cfg.OutgoingEnabled && f.SrcAddr.IsValid() && cfg.InNetworks(f.SrcAddr) {
@@ -437,10 +437,18 @@ func (e *Engine) Process(f flow.Flow) {
 				f.Exporter.String(), strconv.FormatUint(uint64(f.OutIf), 10), "out",
 			).Add(float64(f.Bytes * rate))
 		}
-		if r, ok := cfg.OutboundRate(f.Exporter, f.OutIf, rate); ok {
-			e.record(f.SrcAddr, dirOut, f, r, epoch, upstreamKey(cfg, f.Exporter, f.OutIf))
+		if r, ok := cfg.OutboundRate(f.Exporter, f.OutIf, flowVLAN(&f), rate); ok {
+			e.record(f.SrcAddr, dirOut, f, r, epoch, attributionKey(cfg, &f, f.OutIf))
 		}
 	}
+}
+
+func attributionKey(cfg *config.Config, f *flow.Flow, iface uint32) string {
+	vlan := flowVLAN(f)
+	if cfg.Attribution.Mode == "vlan" && vlan == 0 {
+		return ""
+	}
+	return upstreamKey(cfg, f.Exporter, iface, vlan)
 }
 
 // record accumulates one flow into addr's bucket for the given direction.
@@ -462,21 +470,23 @@ func (e *Engine) record(addr netip.Addr, dir int, f flow.Flow, rate uint64, epoc
 	c := &b.dirs[dir]
 	bytes := f.Bytes * rate
 	packets := f.Packets * rate
-	upstreamCounters := b.upstreams[dir]
-	var upstreamEntry *upstreamCounter
-	for i := range upstreamCounters {
-		if upstreamCounters[i].key == upstream {
-			upstreamEntry = &upstreamCounters[i]
-			break
+	if upstream != "" {
+		upstreamCounters := b.upstreams[dir]
+		var upstreamEntry *upstreamCounter
+		for i := range upstreamCounters {
+			if upstreamCounters[i].key == upstream {
+				upstreamEntry = &upstreamCounters[i]
+				break
+			}
 		}
+		if upstreamEntry == nil {
+			upstreamCounters = append(upstreamCounters, upstreamCounter{key: upstream})
+			b.upstreams[dir] = upstreamCounters
+			upstreamEntry = &upstreamCounters[len(upstreamCounters)-1]
+		}
+		upstreamEntry.bytes += bytes
+		upstreamEntry.packets += packets
 	}
-	if upstreamEntry == nil {
-		upstreamCounters = append(upstreamCounters, upstreamCounter{key: upstream})
-		b.upstreams[dir] = upstreamCounters
-		upstreamEntry = &upstreamCounters[len(upstreamCounters)-1]
-	}
-	upstreamEntry.bytes += bytes
-	upstreamEntry.packets += packets
 	c.bytes[clTotal] += bytes
 	c.packets[clTotal] += packets
 	// sFlow exports one sample per packet; only flow-aggregating protocols

@@ -227,7 +227,8 @@ func TestStatusEndpoint(t *testing.T) {
 		t.Errorf("docs_url = %v, want configured URL", resp["docs_url"])
 	}
 
-	withPool := strings.Replace(apiYAML, "default_rate: 1000", "default_rate: 1000\n  boundary:\n    - exporter: \"10.0.0.2\"\n      external_ifindexes: [1]\n      interface_labels: {1: \"Transit\"}\n  upstream_capacity_pools:\n    - name: \"Transit shared\"\n      ingress_mbps: 10000\n      egress_mbps: 10000\n      members: [{exporter: \"10.0.0.2\", ifindex: 1}]", 1)
+	withPool := strings.Replace(apiYAML, "default_rate: 1000", "default_rate: 1000\n  boundary:\n    - exporter: \"10.0.0.2\"\n      external_ifindexes: [1]\n  upstream_capacity_pools:\n    - name: \"Transit shared\"\n      ingress_mbps: 10000\n      egress_mbps: 10000\n      members: [{exporter: \"10.0.0.2\", ifindex: 1}]", 1)
+	withPool = strings.Replace(withPool, "networks:", "attribution:\n  mode: interface\n  interfaces: [{exporter: \"10.0.0.2\", ifindex: 1, name: \"Transit\"}]\nnetworks:", 1)
 	withPoolServer := testServer(t, storeFromYAML(t, withPool))
 	withPoolResp := do(t, withPoolServer.Handler(), http.MethodGet, "/api/v1/status", "")
 	if err := json.Unmarshal(withPoolResp.Body.Bytes(), &resp); err != nil {

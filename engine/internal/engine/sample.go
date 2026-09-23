@@ -41,6 +41,8 @@ type SampleFlow struct {
 	Exporter     string `json:"exporter,omitempty"`
 	InIfIndex    uint32 `json:"in_ifindex,omitempty"`
 	OutIfIndex   uint32 `json:"out_ifindex,omitempty"`
+	SrcVLAN      uint32 `json:"src_vlan,omitempty"`
+	DstVLAN      uint32 `json:"dst_vlan,omitempty"`
 	// SrcASN/SrcOrg/SrcCountry attribute the source address when a GeoIP
 	// database is configured; omitted (zero) when geo is off or the source
 	// could not be placed.
@@ -181,11 +183,15 @@ func asnKey(info geoip.Info) string {
 	return k
 }
 
-func upstreamKey(cfg *config.Config, exporter netip.Addr, iface uint32) string {
-	if label, ok := cfg.BoundaryLabel(exporter, iface); ok {
-		return label
+func upstreamKey(cfg *config.Config, exporter netip.Addr, iface, vlan uint32) string {
+	return cfg.AttributionKey(exporter, iface, vlan)
+}
+
+func flowVLAN(f *flow.Flow) uint32 {
+	if f.SrcVLAN != 0 {
+		return f.SrcVLAN
 	}
-	return exporter.String() + ":" + strconv.FormatUint(uint64(iface), 10)
+	return f.DstVLAN
 }
 
 // add accumulates one matching flow into the aggregates and, when capture
@@ -213,7 +219,10 @@ func (a *sampleAggregator) add(f *flow.Flow, dir int8, capture bool) {
 	if dir == dirOut {
 		iface = f.OutIf
 	}
-	bump(a.upstreams, upstreamKey(a.boundary, f.Exporter, iface), packets, bytes)
+	vlan := flowVLAN(f)
+	if a.boundary.Attribution.Mode != "vlan" || vlan != 0 {
+		bump(a.upstreams, upstreamKey(a.boundary, f.Exporter, iface, vlan), packets, bytes)
+	}
 	// Attribute the attribution endpoint (the same "source" as TopSources:
 	// the remote attacker for incoming, the victim for outgoing) to its ASN.
 	if a.asn {
@@ -235,6 +244,8 @@ func (a *sampleAggregator) add(f *flow.Flow, dir int8, capture bool) {
 			Exporter:     f.Exporter.String(),
 			InIfIndex:    f.InIf,
 			OutIfIndex:   f.OutIf,
+			SrcVLAN:      f.SrcVLAN,
+			DstVLAN:      f.DstVLAN,
 		}
 		// Enrich the literal source address of the captured flow (the "src"
 		// column in the raw-flow view), independent of direction.

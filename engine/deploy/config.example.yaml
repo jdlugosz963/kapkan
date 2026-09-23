@@ -21,8 +21,10 @@ sampling:
   # links. List each exporter's EXTERNAL (uplink/border) interfaces and a flow
   # is then counted toward a protected host only when it crosses the boundary:
   # inbound when it ENTERS on an external interface, outbound when it LEAVES on
-  # one. Exporters not listed keep counting every sample, so this is safe to
-  # roll out per exporter. egress_sampling: true halves the boundary rate to undo
+  # one. excluded_vlans drops internal VLAN traffic from accounting and detection;
+  # it can also be used without external_ifindexes. Exporters not listed keep
+  # counting every sample, so this is safe to roll out per exporter.
+  # egress_sampling: true halves the boundary rate to undo
   # an in+out double-count, but CALIBRATE before setting it — do NOT assume it
   # from `sflow sample output` alone. On some topologies (e.g. an MLAG pair) the
   # egress copy of an inbound packet uses a different input interface, so the
@@ -34,6 +36,7 @@ sampling:
   # boundary:
   #   - exporter: "10.1.32.2"
   #     external_ifindexes: [1000025]
+  #     excluded_vlans: [100, 200]
   #     egress_sampling: false   # true ONLY if boundary_debug shows ~2x (calibrate)
   #   - exporter: "10.1.32.3"
   #     external_ifindexes: [1000025]

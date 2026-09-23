@@ -1457,49 +1457,70 @@ func withBoundary(block string) string {
 	return strings.Replace(validYAML, "default_rate: 1000", "default_rate: 1000"+block, 1)
 }
 
+func withAttribution(raw, block string) string {
+	return strings.Replace(raw, "networks:", "attribution:\n"+block+"networks:", 1)
+}
+
 func TestBoundaryRate(t *testing.T) {
-	cfg, err := Parse([]byte(withBoundary("\n" +
+	raw := withBoundary("\n" +
 		"  boundary:\n" +
 		"    - exporter: \"10.1.32.2\"\n" +
 		"      external_ifindexes: [100, 101]\n" +
-		"      interface_labels: {100: \"Netia\", 101: \"Netia\"}\n" +
+		"      excluded_vlans: [850, 905]\n" +
 		"      egress_sampling: true\n" +
 		"    - exporter: \"10.1.32.3\"\n" +
-		"      external_ifindexes: [200]")))
+		"      external_ifindexes: [200]\n" +
+		"    - exporter: \"10.1.32.4\"\n" +
+		"      excluded_vlans: [1000]")
+	raw = withAttribution(raw, "  mode: interface\n  interfaces:\n    - {exporter: \"10.1.32.2\", ifindex: 100, name: \"Netia\"}\n")
+	cfg, err := Parse([]byte(raw))
 	if err != nil {
 		t.Fatalf("Parse(boundary) error = %v", err)
 	}
 	ex2 := netip.MustParseAddr("10.1.32.2") // egress sampling
 	ex3 := netip.MustParseAddr("10.1.32.3") // no egress sampling
+	ex4 := netip.MustParseAddr("10.1.32.4") // VLAN-only filter
 	other := netip.MustParseAddr("10.9.9.9")
-	if label, ok := cfg.BoundaryLabel(ex2, 100); !ok || label != "Netia" {
-		t.Errorf("BoundaryLabel(ex2, 100) = (%q, %v), want (Netia, true)", label, ok)
+	if got := cfg.AttributionKey(ex2, 100, 0); got != "Netia" {
+		t.Errorf("AttributionKey(ex2, 100) = %q, want Netia", got)
 	}
-	if _, ok := cfg.BoundaryLabel(ex2, 999); ok {
-		t.Error("BoundaryLabel(ex2, 999) unexpectedly found")
+	if got := cfg.AttributionKey(ex2, 999, 0); got != "10.1.32.2:999" {
+		t.Errorf("AttributionKey(ex2, 999) = %q, want fallback", got)
 	}
 
 	// External interface on an egress-sampling exporter: counted, rate halved.
-	if r, ok := cfg.InboundRate(ex2, 100, 1000); !ok || r != 500 {
+	if r, ok := cfg.InboundRate(ex2, 100, 0, 1000); !ok || r != 500 {
 		t.Errorf("InboundRate(ex2, external, egress) = (%d, %v), want (500, true)", r, ok)
 	}
 	// Internal interface: dropped.
-	if r, ok := cfg.InboundRate(ex2, 999, 1000); ok || r != 0 {
+	if r, ok := cfg.InboundRate(ex2, 999, 0, 1000); ok || r != 0 {
 		t.Errorf("InboundRate(ex2, internal) = (%d, %v), want (0, false)", r, ok)
 	}
 	// External interface, no egress sampling: full rate.
-	if r, ok := cfg.InboundRate(ex3, 200, 1000); !ok || r != 1000 {
+	if r, ok := cfg.InboundRate(ex3, 200, 0, 1000); !ok || r != 1000 {
 		t.Errorf("InboundRate(ex3, external) = (%d, %v), want (1000, true)", r, ok)
 	}
 	// Outbound is gated by the output interface.
-	if r, ok := cfg.OutboundRate(ex2, 101, 1000); !ok || r != 500 {
+	if r, ok := cfg.OutboundRate(ex2, 101, 0, 1000); !ok || r != 500 {
 		t.Errorf("OutboundRate(ex2, external, egress) = (%d, %v), want (500, true)", r, ok)
 	}
-	if _, ok := cfg.OutboundRate(ex3, 999, 1000); ok {
+	if _, ok := cfg.OutboundRate(ex3, 999, 0, 1000); ok {
 		t.Errorf("OutboundRate(ex3, internal) should be dropped")
 	}
+	if _, ok := cfg.InboundRate(ex2, 100, 850, 1000); ok {
+		t.Error("InboundRate(ex2, excluded VLAN) should be dropped")
+	}
+	if _, ok := cfg.OutboundRate(ex2, 101, 905, 1000); ok {
+		t.Error("OutboundRate(ex2, excluded VLAN) should be dropped")
+	}
+	if r, ok := cfg.InboundRate(ex4, 999, 0, 1000); !ok || r != 1000 {
+		t.Errorf("InboundRate(ex4, VLAN-only boundary) = (%d, %v), want (1000, true)", r, ok)
+	}
+	if _, ok := cfg.InboundRate(ex4, 999, 1000, 1000); ok {
+		t.Error("InboundRate(ex4, excluded VLAN) should be dropped")
+	}
 	// Unclassified exporter: legacy, count every sample at full rate.
-	if r, ok := cfg.InboundRate(other, 12345, 1000); !ok || r != 1000 {
+	if r, ok := cfg.InboundRate(other, 12345, 850, 1000); !ok || r != 1000 {
 		t.Errorf("InboundRate(unclassified) = (%d, %v), want (1000, true)", r, ok)
 	}
 }
@@ -1513,17 +1534,31 @@ func TestBoundaryDisabled(t *testing.T) {
 		t.Error("BoundaryDebugEnabled() = true, want false by default")
 	}
 	// With no boundary configured every sample counts at full rate.
-	if r, ok := cfg.InboundRate(netip.MustParseAddr("10.0.0.1"), 0, 1000); !ok || r != 1000 {
+	if r, ok := cfg.InboundRate(netip.MustParseAddr("10.0.0.1"), 0, 0, 1000); !ok || r != 1000 {
 		t.Errorf("InboundRate(no boundary) = (%d, %v), want (1000, true)", r, ok)
 	}
 }
 
+func TestVLANAttribution(t *testing.T) {
+	raw := strings.Replace(validYAML, "networks:", "attribution:\n  mode: vlan\n  vlans:\n    - {exporter: \"10.1.32.2\", vlan: 850, name: \"XDP-Core\"}\nnetworks:", 1)
+	cfg, err := Parse([]byte(raw))
+	if err != nil {
+		t.Fatalf("Parse(vlan attribution): %v", err)
+	}
+	exporter := netip.MustParseAddr("10.1.32.2")
+	if got := cfg.AttributionKey(exporter, 0, 850); got != "XDP-Core" {
+		t.Errorf("named VLAN key = %q, want XDP-Core", got)
+	}
+	if got := cfg.AttributionKey(exporter, 0, 1000); got != "VLAN 1000" {
+		t.Errorf("fallback VLAN key = %q, want VLAN 1000", got)
+	}
+}
+
 func TestUpstreamCapacityPools(t *testing.T) {
-	cfg, err := Parse([]byte(withBoundary("\n" +
+	raw := withBoundary("\n" +
 		"  boundary:\n" +
 		"    - exporter: \"10.1.32.2\"\n" +
 		"      external_ifindexes: [75, 102, 109]\n" +
-		"      interface_labels: {75: \"OPL-TPNET\", 102: \"OPL-CPOP\", 109: \"OPL-TPIX\"}\n" +
 		"  upstream_capacity_pools:\n" +
 		"    - name: \"OPL shared\"\n" +
 		"      ingress_mbps: 10000\n" +
@@ -1531,7 +1566,9 @@ func TestUpstreamCapacityPools(t *testing.T) {
 		"      members:\n" +
 		"        - {exporter: \"10.1.32.2\", ifindex: 75}\n" +
 		"        - {exporter: \"10.1.32.2\", ifindex: 102}\n" +
-		"        - {exporter: \"10.1.32.2\", ifindex: 109}")))
+		"        - {exporter: \"10.1.32.2\", ifindex: 109}")
+	raw = withAttribution(raw, "  mode: interface\n  interfaces:\n    - {exporter: \"10.1.32.2\", ifindex: 75, name: \"OPL-TPNET\"}\n    - {exporter: \"10.1.32.2\", ifindex: 102, name: \"OPL-CPOP\"}\n    - {exporter: \"10.1.32.2\", ifindex: 109, name: \"OPL-TPIX\"}\n")
+	cfg, err := Parse([]byte(raw))
 	if err != nil {
 		t.Fatalf("Parse(capacity pool) error = %v", err)
 	}
@@ -1547,12 +1584,12 @@ func TestUpstreamCapacityPools(t *testing.T) {
 		"  boundary:\n" +
 		"    - exporter: \"10.1.32.2\"\n" +
 		"      external_ifindexes: [75]\n" +
-		"      interface_labels: {75: \"OPL-TPNET\"}\n" +
 		"  upstream_capacity_pools:\n" +
 		"    - name: \"OPL shared\"\n" +
 		"      ingress_mbps: 10000\n" +
 		"      egress_mbps: 10000\n" +
 		"      members: [{exporter: \"10.1.32.2\", ifindex: 999}]")
+	bad = withAttribution(bad, "  mode: interface\n  interfaces: [{exporter: \"10.1.32.2\", ifindex: 75, name: \"OPL-TPNET\"}]\n")
 	if _, err := Parse([]byte(bad)); err == nil || !strings.Contains(err.Error(), "interface 999") {
 		t.Errorf("Parse(invalid pool member) error = %v, want interface error", err)
 	}
@@ -1564,9 +1601,8 @@ func TestValidateBoundaryErrors(t *testing.T) {
 	}{
 		{"bad exporter ip", "\n  boundary:\n    - exporter: \"nope\"\n      external_ifindexes: [1]", "exporter"},
 		{"empty ifindexes", "\n  boundary:\n    - exporter: \"10.0.0.2\"\n      external_ifindexes: []", "external_ifindexes"},
+		{"zero excluded VLAN", "\n  boundary:\n    - exporter: \"10.0.0.2\"\n      excluded_vlans: [0]", "must not contain 0"},
 		{"duplicate exporter", "\n  boundary:\n    - exporter: \"10.0.0.2\"\n      external_ifindexes: [1]\n    - exporter: \"10.0.0.2\"\n      external_ifindexes: [2]", "duplicate"},
-		{"label for internal interface", "\n  boundary:\n    - exporter: \"10.0.0.2\"\n      external_ifindexes: [1]\n      interface_labels:\n        2: Netia", "interface_labels[2]"},
-		{"empty label", "\n  boundary:\n    - exporter: \"10.0.0.2\"\n      external_ifindexes: [1]\n      interface_labels:\n        1: \"  \"", "must not be empty"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

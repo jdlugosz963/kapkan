@@ -35,9 +35,10 @@ type Config struct {
 	DryRun bool `yaml:"dry_run"`
 	// DetectionWindowSeconds is the sliding window used to calculate per-second
 	// traffic rates. Changing it requires a restart.
-	DetectionWindowSeconds int      `yaml:"detection_window_seconds"`
-	Listen                 Listen   `yaml:"listen"`
-	Sampling               Sampling `yaml:"sampling"`
+	DetectionWindowSeconds int         `yaml:"detection_window_seconds"`
+	Listen                 Listen      `yaml:"listen"`
+	Sampling               Sampling    `yaml:"sampling"`
+	Attribution            Attribution `yaml:"attribution"`
 	// FlowSources optionally allowlists the trusted flow-exporter source
 	// addresses. Telemetry arrives over unauthenticated UDP, so the exporter
 	// (source) address is spoofable; when this list is set, only telemetry
@@ -115,8 +116,10 @@ type Config struct {
 	// boundary is the resolved sampling.boundary config, keyed by exporter
 	// address. nil/empty means interface-boundary counting is disabled (every
 	// sample counted). Populated by validate().
-	boundary map[netip.Addr]exporterBoundary `yaml:"-"`
-	upstreamCapacityPools []ResolvedUpstreamCapacityPool `yaml:"-"`
+	boundary              map[netip.Addr]exporterBoundary `yaml:"-"`
+	interfaceAttribution  map[string]string               `yaml:"-"`
+	vlanAttribution       map[string]string               `yaml:"-"`
+	upstreamCapacityPools []ResolvedUpstreamCapacityPool  `yaml:"-"`
 	// Groups are the resolved hostgroups; Groups[0] is always the implicit
 	// global fallback group carrying the top-level thresholds.
 	Groups []Group `yaml:"-"`
@@ -155,14 +158,12 @@ type Listen struct {
 type Sampling struct {
 	// DefaultRate is used when an exporter does not report its own rate.
 	DefaultRate uint64 `yaml:"default_rate"`
-	// Boundary optionally enables interface-boundary counting, which
+	// Boundary optionally enables per-exporter boundary filtering, which
 	// deduplicates a flow seen at multiple sampling vantage points (redundant
-	// exporters, ingress+egress sampling, transit/peer-links). Each entry
-	// classifies one exporter's external/edge interfaces; a flow is then
-	// counted toward a protected host only when it crosses the boundary —
-	// inbound when its input interface is external, outbound when its output
-	// interface is external. Exporters without an entry keep legacy behavior
-	// (every sample counted), so this is safe to enable per exporter.
+	// exporters, ingress+egress sampling, transit/peer-links) and can discard
+	// internal VLANs. Each entry may classify external/edge interfaces, exclude
+	// VLANs, or do both. Exporters without an entry keep legacy behavior (every
+	// sample counted), so this is safe to enable per exporter.
 	Boundary []ExporterBoundary `yaml:"boundary"`
 	// BoundaryDebug, when true, exports the
 	// kapkan_boundary_debug_bytes_total{exporter,iface,dir} metric: the
@@ -177,8 +178,8 @@ type Sampling struct {
 	UpstreamCapacityPools []UpstreamCapacityPool `yaml:"upstream_capacity_pools"`
 }
 
-// ExporterBoundary classifies the external (edge/uplink/border) interfaces of
-// one flow exporter for interface-boundary counting. See Sampling.Boundary.
+// ExporterBoundary filters one flow exporter by external interfaces, excluded
+// VLANs, or both. See Sampling.Boundary.
 type ExporterBoundary struct {
 	// Exporter is the sampler/agent IP this rule applies to.
 	Exporter string `yaml:"exporter"`
@@ -186,29 +187,51 @@ type ExporterBoundary struct {
 	// interfaces (the uplinks/border ports where traffic enters/leaves the
 	// protected network).
 	ExternalIfindexes []uint32 `yaml:"external_ifindexes"`
-	// InterfaceLabels gives external interfaces operator-facing upstream names.
-	// Equal labels intentionally merge multiple links into one attribution bucket.
-	InterfaceLabels map[uint32]string `yaml:"interface_labels"`
+	// ExcludedVLANs are internal VLANs whose flows must not contribute to
+	// protected-host accounting or detection.
+	ExcludedVLANs []uint32 `yaml:"excluded_vlans"`
 	// EgressSampling marks an exporter that also samples on egress (e.g.
 	// Arista `sflow sample output`), which makes every boundary-crossing
 	// packet appear twice. When true, the sampling rate of boundary-counted
 	// traffic for this exporter is halved, correcting the double back to one.
 	EgressSampling bool `yaml:"egress_sampling"`
 }
+
+// Attribution selects the key shown for aggregate traffic and its labels.
+// It is independent from boundary filtering.
+type Attribution struct {
+	Mode       string                 `yaml:"mode"`
+	Interfaces []InterfaceAttribution `yaml:"interfaces"`
+	VLANs      []VLANAttribution      `yaml:"vlans"`
+}
+
+type InterfaceAttribution struct {
+	Exporter string `yaml:"exporter"`
+	Ifindex  uint32 `yaml:"ifindex"`
+	Name     string `yaml:"name"`
+}
+
+type VLANAttribution struct {
+	Exporter string `yaml:"exporter"`
+	VLAN     uint32 `yaml:"vlan"`
+	Name     string `yaml:"name"`
+}
+
 // UpstreamCapacityPool is a shared physical or contracted bandwidth pool.
 // Members are addressed by exporter and ifIndex because names are display
 // labels and may intentionally be reused across links.
 type UpstreamCapacityPool struct {
-	Name        string                 `yaml:"name"`
-	IngressMbps uint64                 `yaml:"ingress_mbps"`
-	EgressMbps  uint64                 `yaml:"egress_mbps"`
-	Members     []UpstreamPoolMember   `yaml:"members"`
+	Name        string               `yaml:"name"`
+	IngressMbps uint64               `yaml:"ingress_mbps"`
+	EgressMbps  uint64               `yaml:"egress_mbps"`
+	Members     []UpstreamPoolMember `yaml:"members"`
 }
 
 // UpstreamPoolMember identifies one labelled boundary interface.
 type UpstreamPoolMember struct {
 	Exporter string `yaml:"exporter"`
-	Ifindex  uint32 `yaml:"ifindex"`
+	Ifindex  uint32 `yaml:"ifindex,omitempty"`
+	VLAN     uint32 `yaml:"vlan,omitempty"`
 }
 
 // ResolvedUpstreamCapacityPool is the operator-safe form returned to the UI.
@@ -222,7 +245,7 @@ type ResolvedUpstreamCapacityPool struct {
 // exporterBoundary is the resolved, lookup-ready form of one ExporterBoundary.
 type exporterBoundary struct {
 	external map[uint32]struct{}
-	labels   map[uint32]string
+	excluded map[uint32]struct{}
 	egress   bool
 }
 
@@ -1628,6 +1651,7 @@ func parse(raw []byte) (*Config, error) {
 		DryRun:                 true,
 		DetectionWindowSeconds: defaultDetectionWindowSeconds,
 	}
+	cfg.Attribution.Mode = "interface"
 	cfg.BGP.ListenPort = -1
 	// Graceful Restart is on by default; an absent graceful_restart block keeps
 	// it enabled, while `enabled: false` in the file overrides this. Timers
@@ -1709,6 +1733,9 @@ func (c *Config) validate() error {
 
 	if c.Sampling.DefaultRate < 1 {
 		return fmt.Errorf("sampling.default_rate must be >= 1, got %d", c.Sampling.DefaultRate)
+	}
+	if err := c.resolveAttribution(); err != nil {
+		return err
 	}
 	if err := c.resolveBoundary(); err != nil {
 		return err
@@ -3557,8 +3584,8 @@ func (c *Config) InNetworks(addr netip.Addr) bool {
 }
 
 // resolveBoundary parses sampling.boundary into the lookup-ready c.boundary
-// map. It rejects malformed exporter addresses, empty interface lists and
-// duplicate exporter entries.
+// map. It rejects malformed exporter addresses, empty rules and duplicate
+// exporter entries.
 func (c *Config) resolveBoundary() error {
 	c.boundary = nil
 	if len(c.Sampling.Boundary) == 0 {
@@ -3575,27 +3602,68 @@ func (c *Config) resolveBoundary() error {
 		if _, dup := c.boundary[addr]; dup {
 			return fmt.Errorf("sampling.boundary: duplicate exporter %q", eb.Exporter)
 		}
-		if len(eb.ExternalIfindexes) == 0 {
-			return fmt.Errorf("sampling.boundary[%d] (%s): external_ifindexes must list at least one interface", i, eb.Exporter)
+		if len(eb.ExternalIfindexes) == 0 && len(eb.ExcludedVLANs) == 0 {
+			return fmt.Errorf("sampling.boundary[%d] (%s): external_ifindexes or excluded_vlans must list at least one value", i, eb.Exporter)
 		}
 		ext := make(map[uint32]struct{}, len(eb.ExternalIfindexes))
 		for _, idx := range eb.ExternalIfindexes {
 			ext[idx] = struct{}{}
 		}
-		labels := make(map[uint32]string, len(eb.InterfaceLabels))
-		for idx, label := range eb.InterfaceLabels {
-			if _, ok := ext[idx]; !ok {
-				return fmt.Errorf("sampling.boundary[%d] (%s): interface_labels[%d] is not listed in external_ifindexes", i, eb.Exporter, idx)
+		excluded := make(map[uint32]struct{}, len(eb.ExcludedVLANs))
+		for _, vlan := range eb.ExcludedVLANs {
+			if vlan == 0 {
+				return fmt.Errorf("sampling.boundary[%d] (%s): excluded_vlans must not contain 0", i, eb.Exporter)
 			}
-			label = strings.TrimSpace(label)
-			if label == "" {
-				return fmt.Errorf("sampling.boundary[%d] (%s): interface_labels[%d] must not be empty", i, eb.Exporter, idx)
-			}
-			labels[idx] = label
+			excluded[vlan] = struct{}{}
 		}
-		c.boundary[addr] = exporterBoundary{external: ext, labels: labels, egress: eb.EgressSampling}
+		c.boundary[addr] = exporterBoundary{external: ext, excluded: excluded, egress: eb.EgressSampling}
 	}
 	return nil
+}
+
+func (c *Config) resolveAttribution() error {
+	if c.Attribution.Mode != "interface" && c.Attribution.Mode != "vlan" {
+		return fmt.Errorf("attribution.mode must be interface or vlan, got %q", c.Attribution.Mode)
+	}
+	c.interfaceAttribution = make(map[string]string, len(c.Attribution.Interfaces))
+	for i, entry := range c.Attribution.Interfaces {
+		key, err := attributionAddressKey(entry.Exporter, entry.Ifindex)
+		if err != nil {
+			return fmt.Errorf("attribution.interfaces[%d]: %w", i, err)
+		}
+		name := strings.TrimSpace(entry.Name)
+		if name == "" {
+			return fmt.Errorf("attribution.interfaces[%d].name must not be empty", i)
+		}
+		if _, exists := c.interfaceAttribution[key]; exists {
+			return fmt.Errorf("attribution.interfaces: duplicate exporter/ifindex %q", key)
+		}
+		c.interfaceAttribution[key] = name
+	}
+	c.vlanAttribution = make(map[string]string, len(c.Attribution.VLANs))
+	for i, entry := range c.Attribution.VLANs {
+		key, err := attributionAddressKey(entry.Exporter, entry.VLAN)
+		if err != nil {
+			return fmt.Errorf("attribution.vlans[%d]: %w", i, err)
+		}
+		name := strings.TrimSpace(entry.Name)
+		if name == "" {
+			return fmt.Errorf("attribution.vlans[%d].name must not be empty", i)
+		}
+		if _, exists := c.vlanAttribution[key]; exists {
+			return fmt.Errorf("attribution.vlans: duplicate exporter/vlan %q", key)
+		}
+		c.vlanAttribution[key] = name
+	}
+	return nil
+}
+
+func attributionAddressKey(exporter string, number uint32) (string, error) {
+	addr, err := netip.ParseAddr(exporter)
+	if err != nil {
+		return "", fmt.Errorf("exporter: invalid IP %q: %w", exporter, err)
+	}
+	return addr.Unmap().String() + ":" + strconv.FormatUint(uint64(number), 10), nil
 }
 
 // resolveUpstreamCapacityPools resolves pool members to their boundary labels.
@@ -3637,15 +3705,27 @@ func (c *Config) resolveUpstreamCapacityPools() error {
 				return fmt.Errorf("sampling.upstream_capacity_pools[%d] (%s).members[%d].exporter: invalid IP %q: %w", poolIndex, pool.Name, memberIndex, member.Exporter, err)
 			}
 			addr = addr.Unmap()
-			boundary, found := c.boundary[addr]
-			if !found {
-				return fmt.Errorf("sampling.upstream_capacity_pools[%d] (%s).members[%d]: exporter %q has no sampling.boundary entry", poolIndex, pool.Name, memberIndex, member.Exporter)
+			if c.Attribution.Mode == "interface" && member.Ifindex == 0 {
+				return fmt.Errorf("sampling.upstream_capacity_pools[%d] (%s).members[%d]: ifindex must be set in interface mode", poolIndex, pool.Name, memberIndex)
 			}
-			label, found := boundary.labels[member.Ifindex]
-			if !found {
-				return fmt.Errorf("sampling.upstream_capacity_pools[%d] (%s).members[%d]: interface %d must be an external interface with interface_labels", poolIndex, pool.Name, memberIndex, member.Ifindex)
+			if c.Attribution.Mode == "vlan" && member.VLAN == 0 {
+				return fmt.Errorf("sampling.upstream_capacity_pools[%d] (%s).members[%d]: vlan must be set in vlan mode", poolIndex, pool.Name, memberIndex)
 			}
-			memberKey := addr.String() + "/" + strconv.FormatUint(uint64(member.Ifindex), 10)
+			attributionLookupKey, _ := attributionAddressKey(member.Exporter, func() uint32 {
+				if c.Attribution.Mode == "vlan" {
+					return member.VLAN
+				}
+				return member.Ifindex
+			}())
+			if c.Attribution.Mode == "interface" {
+				if _, found := c.interfaceAttribution[attributionLookupKey]; !found {
+					return fmt.Errorf("sampling.upstream_capacity_pools[%d] (%s).members[%d]: interface %d must be named in attribution.interfaces", poolIndex, pool.Name, memberIndex, member.Ifindex)
+				}
+			} else if _, found := c.vlanAttribution[attributionLookupKey]; !found {
+				return fmt.Errorf("sampling.upstream_capacity_pools[%d] (%s).members[%d]: vlan %d must be named in attribution.vlans", poolIndex, pool.Name, memberIndex, member.VLAN)
+			}
+			label := c.AttributionKey(addr, member.Ifindex, member.VLAN)
+			memberKey := addr.String() + "/" + label
 			if _, duplicate := members[memberKey]; duplicate {
 				return fmt.Errorf("sampling.upstream_capacity_pools: interface %s is assigned to more than one pool", memberKey)
 			}
@@ -3669,15 +3749,21 @@ func (c *Config) UpstreamCapacityPools() []ResolvedUpstreamCapacityPool {
 // BoundaryDebugEnabled reports whether the boundary-discovery metric is on.
 func (c *Config) BoundaryDebugEnabled() bool { return c.Sampling.BoundaryDebug }
 
-// BoundaryLabel returns the configured operator-facing label for one exporter
-// interface. The exporter is part of the key because ifIndex is router-local.
-func (c *Config) BoundaryLabel(exporter netip.Addr, iface uint32) (string, bool) {
-	b, ok := c.boundary[exporter.Unmap()]
-	if !ok {
-		return "", false
+// AttributionKey returns the operator-facing key for one flow direction.
+func (c *Config) AttributionKey(exporter netip.Addr, iface, vlan uint32) string {
+	exporter = exporter.Unmap()
+	if c.Attribution.Mode == "vlan" {
+		key := exporter.String() + ":" + strconv.FormatUint(uint64(vlan), 10)
+		if label, ok := c.vlanAttribution[key]; ok {
+			return label
+		}
+		return "VLAN " + strconv.FormatUint(uint64(vlan), 10)
 	}
-	label, ok := b.labels[iface]
-	return label, ok
+	key := exporter.String() + ":" + strconv.FormatUint(uint64(iface), 10)
+	if label, ok := c.interfaceAttribution[key]; ok {
+		return label
+	}
+	return key
 }
 
 // InboundRate decides whether a sample from exporter arriving on input
@@ -3687,24 +3773,29 @@ func (c *Config) BoundaryLabel(exporter netip.Addr, iface uint32) (string, bool)
 // only samples entering on an external interface, halving the rate when that
 // exporter also samples on egress (each boundary-crossing packet is then seen
 // twice, so halving restores the true volume).
-func (c *Config) InboundRate(exporter netip.Addr, inIf uint32, rate uint64) (uint64, bool) {
-	return c.boundaryRate(exporter, inIf, rate)
+func (c *Config) InboundRate(exporter netip.Addr, inIf, vlan uint32, rate uint64) (uint64, bool) {
+	return c.boundaryRate(exporter, inIf, vlan, rate)
 }
 
 // OutboundRate is the egress-direction counterpart of InboundRate: it gates a
 // sample by its output interface (traffic leaving a protected source crosses
 // the boundary on egress).
-func (c *Config) OutboundRate(exporter netip.Addr, outIf uint32, rate uint64) (uint64, bool) {
-	return c.boundaryRate(exporter, outIf, rate)
+func (c *Config) OutboundRate(exporter netip.Addr, outIf, vlan uint32, rate uint64) (uint64, bool) {
+	return c.boundaryRate(exporter, outIf, vlan, rate)
 }
 
-func (c *Config) boundaryRate(exporter netip.Addr, iface uint32, rate uint64) (uint64, bool) {
+func (c *Config) boundaryRate(exporter netip.Addr, iface, vlan uint32, rate uint64) (uint64, bool) {
 	b, ok := c.boundary[exporter.Unmap()]
 	if !ok {
 		return rate, true // exporter not classified: count every sample
 	}
-	if _, external := b.external[iface]; !external {
-		return 0, false // internal/transit/peer-link sample: a duplicate, drop it
+	if _, excluded := b.excluded[vlan]; excluded {
+		return 0, false
+	}
+	if len(b.external) > 0 {
+		if _, external := b.external[iface]; !external {
+			return 0, false // internal/transit/peer-link sample: a duplicate, drop it
+		}
 	}
 	if b.egress && rate > 1 {
 		rate /= 2

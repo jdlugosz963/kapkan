@@ -613,7 +613,8 @@ func TestSnapshotUpstreamRates(t *testing.T) {
 		"  boundary:\n"+
 		"    - exporter: \"10.1.32.2\"\n"+
 		"      external_ifindexes: [71, 72]\n"+
-		"      interface_labels: {71: \"Netia\", 72: \"NASK\"}", 1)
+		"      egress_sampling: false", 1)
+	yaml = strings.Replace(yaml, "networks:", "attribution:\n  mode: interface\n  interfaces:\n    - {exporter: \"10.1.32.2\", ifindex: 71, name: \"Netia\"}\n    - {exporter: \"10.1.32.2\", ifindex: 72, name: \"NASK\"}\nnetworks:", 1)
 	cfg, err := config.Parse([]byte(yaml))
 	if err != nil {
 		t.Fatalf("parse config: %v", err)
@@ -639,6 +640,93 @@ func TestSnapshotUpstreamRates(t *testing.T) {
 	}
 	if got := snap[0].Upstreams[1]; got.Key != "NASK" || got.PPS != 400 || got.Mbps != 0.32 {
 		t.Errorf("second upstream = %+v, want NASK at 400 pps / 0.32 Mbps", got)
+	}
+}
+
+func TestProcessDropsExcludedVLAN(t *testing.T) {
+	yaml := strings.Replace(baseYAML, "sampling:\n  default_rate: 1000", "sampling:\n"+
+		"  default_rate: 1000\n"+
+		"  boundary:\n"+
+		"    - exporter: \"10.1.32.2\"\n"+
+		"      excluded_vlans: [905]", 1)
+	cfg, err := config.Parse([]byte(yaml))
+	if err != nil {
+		t.Fatalf("parse config: %v", err)
+	}
+	e := New(config.NewStore("", cfg), WithWindow(1))
+	f := udpFlow("203.0.113.40", 100, 10, 10)
+	f.Exporter = netip.MustParseAddr("10.1.32.2")
+	f.DstVLAN = 905
+	e.Process(f)
+
+	if snap := e.Snapshot(); len(snap) != 0 {
+		t.Fatalf("snapshot = %+v, want excluded VLAN flow to be dropped", snap)
+	}
+}
+
+func TestSnapshotVLANAttributionUsesNonzeroVLAN(t *testing.T) {
+	yaml := strings.Replace(baseYAML, "networks:", "attribution:\n  mode: vlan\nnetworks:", 1)
+	cfg, err := config.Parse([]byte(yaml))
+	if err != nil {
+		t.Fatalf("parse config: %v", err)
+	}
+	clk := newMockClock()
+	e := New(config.NewStore("", cfg), WithClock(clk.Now), WithWindow(1))
+	f := udpFlow("203.0.113.40", 100, 10, 10)
+	f.SrcVLAN = 905
+	f.DstVLAN = 0
+	e.Process(f)
+	clk.Advance(time.Second)
+
+	snap := e.Snapshot()
+	if len(snap) != 1 || len(snap[0].Upstreams) != 1 {
+		t.Fatalf("snapshot upstreams = %+v, want one VLAN entry", snap)
+	}
+	if got := snap[0].Upstreams[0].Key; got != "VLAN 905" {
+		t.Errorf("inbound VLAN key = %q, want VLAN 905", got)
+	}
+}
+
+func TestSnapshotVLANAttributionUsesNonzeroVLANForEgress(t *testing.T) {
+	yaml := strings.Replace(baseYAML, "networks:", "attribution:\n  mode: vlan\nthresholds_outgoing: {pps: 1, mbps: 1, flows_per_sec: 1}\nnetworks:", 1)
+	cfg, err := config.Parse([]byte(yaml))
+	if err != nil {
+		t.Fatalf("parse config: %v", err)
+	}
+	clk := newMockClock()
+	e := New(config.NewStore("", cfg), WithClock(clk.Now), WithWindow(1))
+	e.Process(flow.Flow{
+		SrcAddr:  netip.MustParseAddr("203.0.113.40"),
+		DstAddr:  netip.MustParseAddr("198.51.100.1"),
+		Exporter: netip.MustParseAddr("10.1.32.2"),
+		Bytes:    100, Packets: 10, SamplingRate: 1, OutIf: 145,
+		SrcVLAN: 0, DstVLAN: 905, Wire: flow.ProtoNetFlow9,
+	})
+	clk.Advance(time.Second)
+
+	snap := e.Snapshot()
+	if len(snap) != 1 || len(snap[0].OutUpstreams) != 1 {
+		t.Fatalf("snapshot egress upstreams = %+v, want one VLAN entry", snap)
+	}
+	if got := snap[0].OutUpstreams[0].Key; got != "VLAN 905" {
+		t.Errorf("egress VLAN key = %q, want VLAN 905", got)
+	}
+}
+
+func TestSnapshotVLANAttributionOmitsZeroVLAN(t *testing.T) {
+	yaml := strings.Replace(baseYAML, "networks:", "attribution:\n  mode: vlan\nnetworks:", 1)
+	cfg, err := config.Parse([]byte(yaml))
+	if err != nil {
+		t.Fatalf("parse config: %v", err)
+	}
+	clk := newMockClock()
+	e := New(config.NewStore("", cfg), WithClock(clk.Now), WithWindow(1))
+	e.Process(udpFlow("203.0.113.40", 100, 10, 10))
+	clk.Advance(time.Second)
+
+	snap := e.Snapshot()
+	if len(snap) != 1 || len(snap[0].Upstreams) != 0 {
+		t.Fatalf("snapshot upstreams = %+v, want no unattributable VLAN entry", snap)
 	}
 }
 
