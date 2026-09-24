@@ -87,6 +87,9 @@ var numericBounds = map[string]map[string]float64{
 	"storage.clickhouse.queue_size":               {"minimum": 1, "maximum": 10000000},
 	"storage.clickhouse.flush_interval_seconds":   {"minimum": 1, "maximum": 3600},
 	"storage.clickhouse.traffic_interval_seconds": {"minimum": 1, "maximum": 3600},
+	"mac_ip_mapping.poll_interval_seconds":        {"minimum": 1, "maximum": 3600},
+	"mac_ip_mapping.timeout_seconds":              {"minimum": 1, "maximum": 60},
+	"mac_ip_mapping.retries":                      {"minimum": 0, "maximum": 10},
 
 	"escalation.after_seconds": {"minimum": 0, "maximum": 86400},
 

@@ -20,6 +20,7 @@ import (
 	"github.com/kapkan-io/kapkan/internal/fpplane"
 	"github.com/kapkan-io/kapkan/internal/geoip"
 	"github.com/kapkan-io/kapkan/internal/ingest"
+	"github.com/kapkan-io/kapkan/internal/macip"
 	"github.com/kapkan-io/kapkan/internal/metrics"
 	"github.com/kapkan-io/kapkan/internal/mitigate"
 	"github.com/kapkan-io/kapkan/internal/notify"
@@ -37,6 +38,7 @@ type App struct {
 	API      *api.Server
 	Storage  storage.Writer
 	GeoIP    *geoip.DB
+	MACIP    *macip.Collector
 	Update   *update.Checker // nil when update_check is disabled
 	// Dataplane is the in-kernel XDP filter, nil when dataplane.enabled is
 	// false or absent. Non-nil means the program is attached and static policy
@@ -88,6 +90,9 @@ func New(store *config.Store, log *slog.Logger) (*App, error) {
 		engine.WithLogger(log),
 		engine.WithWindow(cfg.DetectionWindowSeconds),
 	}
+	macIPCache := macip.NewCache()
+	engineOpts = append(engineOpts, engine.WithMACIPResolver(macIPCache))
+	a.MACIP = macip.NewCollector(store, macIPCache, log)
 	if gc := cfg.GeoIPCfg; gc.Enabled {
 		db, err := geoip.Open(gc.ASNPath, gc.CountryPath)
 		if err != nil {
@@ -232,8 +237,9 @@ func (a *App) Start(ctx context.Context) error {
 
 	go func() { a.apiErr <- a.API.ListenAndServe(runCtx) }()
 
-	a.wg.Add(4)
+	a.wg.Add(5)
 	go func() { defer a.wg.Done(); a.Engine.Run(runCtx) }()
+	go func() { defer a.wg.Done(); a.MACIP.Run(runCtx) }()
 	go func() { defer a.wg.Done(); a.consumeEvents(runCtx) }()
 	go func() { defer a.wg.Done(); a.consumeOngoing(runCtx) }()
 	go func() { defer a.wg.Done(); a.persistTraffic(runCtx) }()

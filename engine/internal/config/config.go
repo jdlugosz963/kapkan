@@ -35,11 +35,12 @@ type Config struct {
 	DryRun bool `yaml:"dry_run"`
 	// DetectionWindowSeconds is the sliding window used to calculate per-second
 	// traffic rates. Changing it requires a restart.
-	DetectionWindowSeconds int         `yaml:"detection_window_seconds"`
-	Listen                 Listen      `yaml:"listen"`
-	Sampling               Sampling    `yaml:"sampling"`
-	Attribution            Attribution `yaml:"attribution"`
-	OpenPeering            OpenPeering `yaml:"open_peering"`
+	DetectionWindowSeconds int          `yaml:"detection_window_seconds"`
+	Listen                 Listen       `yaml:"listen"`
+	Sampling               Sampling     `yaml:"sampling"`
+	Attribution            Attribution  `yaml:"attribution"`
+	OpenPeering            OpenPeering  `yaml:"open_peering"`
+	MACIPMapping           MACIPMapping `yaml:"mac_ip_mapping"`
 	// FlowSources optionally allowlists the trusted flow-exporter source
 	// addresses. Telemetry arrives over unauthenticated UDP, so the exporter
 	// (source) address is spoofable; when this list is set, only telemetry
@@ -227,6 +228,22 @@ type OpenPeeringMember struct {
 	Exporter string `yaml:"exporter"`
 	Ifindex  uint32 `yaml:"ifindex,omitempty"`
 	VLAN     uint32 `yaml:"vlan,omitempty"`
+}
+
+// MACIPMapping configures live IPv4 ARP-table collection from routers.
+type MACIPMapping struct {
+	Enabled             bool         `yaml:"enabled"`
+	PollIntervalSeconds int          `yaml:"poll_interval_seconds"`
+	OID                 string       `yaml:"oid"`
+	TimeoutSeconds      int          `yaml:"timeout_seconds"`
+	Retries             int          `yaml:"retries"`
+	Routers             []SNMPRouter `yaml:"routers"`
+}
+
+type SNMPRouter struct {
+	Name         string `yaml:"name"`
+	Address      string `yaml:"address"`
+	CommunityEnv string `yaml:"community_env"`
 }
 
 // UpstreamCapacityPool is a shared physical or contracted bandwidth pool.
@@ -1752,6 +1769,9 @@ func (c *Config) validate() error {
 	if err := c.resolveOpenPeering(); err != nil {
 		return err
 	}
+	if err := c.validateMACIPMapping(); err != nil {
+		return err
+	}
 	if err := c.resolveBoundary(); err != nil {
 		return err
 	}
@@ -1900,6 +1920,71 @@ func (c *Config) validate() error {
 	}
 	if err := c.validateUpdateCheck(); err != nil {
 		return err
+	}
+	return nil
+}
+
+func (c *Config) validateMACIPMapping() error {
+	m := &c.MACIPMapping
+	if !m.Enabled {
+		return nil
+	}
+	if m.PollIntervalSeconds == 0 {
+		m.PollIntervalSeconds = 60
+	}
+	if m.OID == "" {
+		m.OID = ".1.3.6.1.2.1.4.22.1.2"
+	}
+	if m.TimeoutSeconds == 0 {
+		m.TimeoutSeconds = 3
+	}
+	if m.Retries == 0 {
+		m.Retries = 1
+	}
+	if m.PollIntervalSeconds < 1 || m.PollIntervalSeconds > 3600 {
+		return fmt.Errorf("mac_ip_mapping.poll_interval_seconds must be between 1 and 3600")
+	}
+	if m.TimeoutSeconds < 1 || m.TimeoutSeconds > 60 {
+		return fmt.Errorf("mac_ip_mapping.timeout_seconds must be between 1 and 60")
+	}
+	if m.Retries < 0 || m.Retries > 10 {
+		return fmt.Errorf("mac_ip_mapping.retries must be between 0 and 10")
+	}
+	oid := strings.Trim(m.OID, ".")
+	if oid == "" {
+		return fmt.Errorf("mac_ip_mapping.oid must be a numeric OID")
+	}
+	for _, part := range strings.Split(oid, ".") {
+		if _, err := strconv.ParseUint(part, 10, 32); err != nil {
+			return fmt.Errorf("mac_ip_mapping.oid must be a numeric OID, got %q", m.OID)
+		}
+	}
+	if len(m.Routers) == 0 {
+		return fmt.Errorf("mac_ip_mapping.routers must contain at least one router")
+	}
+	seenNames := make(map[string]struct{}, len(m.Routers))
+	seenAddresses := make(map[netip.Addr]struct{}, len(m.Routers))
+	for i := range m.Routers {
+		router := &m.Routers[i]
+		router.Name = strings.TrimSpace(router.Name)
+		if router.Name == "" {
+			return fmt.Errorf("mac_ip_mapping.routers[%d].name is required", i)
+		}
+		if _, exists := seenNames[router.Name]; exists {
+			return fmt.Errorf("mac_ip_mapping.routers: duplicate name %q", router.Name)
+		}
+		seenNames[router.Name] = struct{}{}
+		address, err := netip.ParseAddr(router.Address)
+		if err != nil {
+			return fmt.Errorf("mac_ip_mapping.routers[%d].address: %w", i, err)
+		}
+		if _, exists := seenAddresses[address]; exists {
+			return fmt.Errorf("mac_ip_mapping.routers: duplicate address %q", router.Address)
+		}
+		seenAddresses[address] = struct{}{}
+		if !envNameRe.MatchString(router.CommunityEnv) {
+			return fmt.Errorf("mac_ip_mapping.routers[%d].community_env must be an environment variable name", i)
+		}
 	}
 	return nil
 }

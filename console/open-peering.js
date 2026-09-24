@@ -25,14 +25,16 @@
     }
     return h("div", { class: "peer-list" }, rows.map(function (peer, index) {
       var share = Math.max(0, Math.min(1, peer.share || 0));
+      var ips = peer.ips || [];
+      var macLabel = peer.mac + (ips.length ? " (" + ips.join(", ") + ")" : "");
       return h("div", { class: "peer-row" }, [
         h("span", { class: "peer-row__rank", text: String(index + 1) }),
-        h("span", { class: "peer-row__mac mono", text: peer.mac }),
+        h("span", { class: "peer-row__mac mono", text: macLabel, attrs: { title: macLabel } }),
         h("span", { class: "peer-row__rate", text: I.mbps(peer.mbps || 0) }),
         h("span", { class: "peer-row__pps", text: I.pps(peer.pps || 0) }),
         h("span", { class: "peer-row__pct", text: I.pct(share) }),
         h("progress", { class: "peer-row__bar " + cssClass, attrs: {
-          max: "100", value: String(share * 100), "aria-label": peer.mac + " " + I.pct(share)
+          max: "100", value: String(share * 100), "aria-label": macLabel + " " + I.pct(share)
         } })
       ]);
     }));

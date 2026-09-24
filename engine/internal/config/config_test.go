@@ -1590,6 +1590,28 @@ func TestOpenPeeringRejectsInvalidMembers(t *testing.T) {
 	}
 }
 
+func TestMACIPMappingDefaultsAndValidation(t *testing.T) {
+	raw := strings.Replace(validYAML, "networks:", `mac_ip_mapping:
+  enabled: true
+  routers:
+    - {name: "NE8000", address: "172.16.7.100", community_env: "KAPKAN_SNMP_COMMUNITY"}
+    - {name: "ASR9901", address: "172.16.7.110", community_env: "KAPKAN_SNMP_COMMUNITY"}
+networks:`, 1)
+	cfg, err := Parse([]byte(raw))
+	if err != nil {
+		t.Fatalf("Parse(mac_ip_mapping): %v", err)
+	}
+	got := cfg.MACIPMapping
+	if got.PollIntervalSeconds != 60 || got.TimeoutSeconds != 3 || got.Retries != 1 || got.OID != ".1.3.6.1.2.1.4.22.1.2" {
+		t.Fatalf("defaults = %+v", got)
+	}
+
+	bad := strings.Replace(raw, "KAPKAN_SNMP_COMMUNITY", "not-valid", 1)
+	if _, err := Parse([]byte(bad)); err == nil || !strings.Contains(err.Error(), "community_env") {
+		t.Fatalf("Parse(invalid community_env) error = %v", err)
+	}
+}
+
 func TestUpstreamCapacityPools(t *testing.T) {
 	raw := withBoundary("\n" +
 		"  boundary:\n" +

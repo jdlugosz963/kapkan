@@ -277,7 +277,9 @@ type Engine struct {
 
 	// geo optionally attributes sample sources to ASN/country. nil disables
 	// enrichment; the resolver is read-only and safe for concurrent use.
-	geo         geoip.Resolver
+	geo geoip.Resolver
+	// macIP optionally enriches OpenPeering MAC rows with live router ARP data.
+	macIP       MACIPResolver
 	openPeering openPeeringAccumulator
 
 	events chan Event
@@ -344,6 +346,11 @@ func WithGeoIP(r geoip.Resolver) Option {
 		}
 		e.geo = r
 	}
+}
+
+// WithMACIPResolver attaches the live MAC-to-IP lookup used by OpenPeering.
+func WithMACIPResolver(r MACIPResolver) Option {
+	return func(e *Engine) { e.macIP = r }
 }
 
 // New creates an Engine reading thresholds and policy from store.

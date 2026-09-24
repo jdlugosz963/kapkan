@@ -2,6 +2,7 @@ package engine
 
 import (
 	"net/netip"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -9,6 +10,10 @@ import (
 	"github.com/kapkan-io/kapkan/internal/config"
 	"github.com/kapkan-io/kapkan/internal/flow"
 )
+
+type fakeMACIPResolver map[string][]string
+
+func (r fakeMACIPResolver) Lookup(mac string) []string { return r[mac] }
 
 func TestOpenPeeringSnapshot(t *testing.T) {
 	yaml := strings.Replace(baseYAML, "networks:", `attribution:
@@ -24,7 +29,9 @@ networks:`, 1)
 		t.Fatalf("Parse: %v", err)
 	}
 	clock := newMockClock()
-	eng := New(config.NewStore("", cfg), WithClock(clock.Now), WithWindow(5))
+	eng := New(config.NewStore("", cfg), WithClock(clock.Now), WithWindow(5), WithMACIPResolver(fakeMACIPResolver{
+		"00:59:dc:16:5c:e9": {"10.255.85.11"},
+	}))
 	exporter := netip.MustParseAddr("198.51.100.9")
 	peer := [6]byte{0x00, 0x59, 0xdc, 0x16, 0x5c, 0xe9}
 	eng.Process(flow.Flow{
@@ -54,6 +61,9 @@ networks:`, 1)
 	}
 	if len(snapshot.Ingress.AllMACs) != 1 {
 		t.Fatalf("ingress all MACs = %+v", snapshot.Ingress.AllMACs)
+	}
+	if got := snapshot.Ingress.Members[0].TopMACs[0].IPs; !reflect.DeepEqual(got, []string{"10.255.85.11"}) {
+		t.Fatalf("member IPs = %v", got)
 	}
 }
 

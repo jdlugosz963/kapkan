@@ -64,10 +64,17 @@ type OpenPeeringMemberSnapshot struct {
 }
 
 type OpenPeeringMAC struct {
-	MAC   string  `json:"mac"`
-	Mbps  float64 `json:"mbps"`
-	PPS   float64 `json:"pps"`
-	Share float64 `json:"share"`
+	MAC   string   `json:"mac"`
+	IPs   []string `json:"ips,omitempty"`
+	Mbps  float64  `json:"mbps"`
+	PPS   float64  `json:"pps"`
+	Share float64  `json:"share"`
+}
+
+// MACIPResolver provides current IP addresses without coupling the engine to
+// the SNMP collector that owns them.
+type MACIPResolver interface {
+	Lookup(mac string) []string
 }
 
 func (a *openPeeringAccumulator) record(dir int, epoch int64, member string, mac [6]byte, bytes, packets, rate uint64) {
@@ -136,7 +143,25 @@ func (e *Engine) OpenPeeringSnapshot() OpenPeeringSnapshot {
 	nowSec := e.now().Unix()
 	snapshot.Ingress = e.openPeeringDirection(nowSec, dirIn)
 	snapshot.Egress = e.openPeeringDirection(nowSec, dirOut)
+	e.enrichOpenPeeringDirection(&snapshot.Ingress)
+	e.enrichOpenPeeringDirection(&snapshot.Egress)
 	return snapshot
+}
+
+func (e *Engine) enrichOpenPeeringDirection(direction *OpenPeeringDirection) {
+	if e.macIP == nil {
+		return
+	}
+	enrich := func(rows []OpenPeeringMAC) {
+		for i := range rows {
+			rows[i].IPs = e.macIP.Lookup(rows[i].MAC)
+		}
+	}
+	enrich(direction.TopMACs)
+	enrich(direction.AllMACs)
+	for i := range direction.Members {
+		enrich(direction.Members[i].TopMACs)
+	}
 }
 
 func emptyOpenPeeringDirection() OpenPeeringDirection {

@@ -921,6 +921,53 @@
       },
       "type": "object"
     },
+    "mac_ip_mapping": {
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "oid": {
+          "type": "string"
+        },
+        "poll_interval_seconds": {
+          "maximum": 3600,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "retries": {
+          "maximum": 10,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "routers": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "address": {
+                "type": "string"
+              },
+              "community_env": {
+                "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "type": "array",
+          "x-optional": true
+        },
+        "timeout_seconds": {
+          "maximum": 60,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
     "mitigation": {
       "enum": [
         "blackhole",
