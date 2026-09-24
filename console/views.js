@@ -147,10 +147,20 @@
       h("div", {}, [h("div", { class: "section-label" }, [w.icon("activity"), h("span", { text: I.t("ac.metricvsthreshold") })]), K.gauge(a.metric, a.rate, a.threshold)]),
       mitigation
     ]);
+    var openPeering = (a.sample && a.sample.open_peering ? a.sample.open_peering : []).map(function (member) {
+      var rows = (member.macs || []).map(function (peer) {
+        var ips = peer.ips || [];
+        return { key: peer.mac + (ips.length ? " (" + ips.join(", ") + ")" : ""), packets: peer.packets, bytes: peer.bytes };
+      });
+      if (member.other_packets) rows.push({ key: I.t("ac.othermacs"), packets: member.other_packets, bytes: member.other_bytes });
+      if (member.unknown_packets) rows.push({ key: I.t("ac.unknownmac"), packets: member.unknown_packets, bytes: member.unknown_bytes });
+      return K.shareGroup(member.member, rows, { src: true, total: member.packets, limit: rows.length });
+    });
     var sources = a.sample ? h("div", {}, [
       h("div", { class: "section-label" }, [w.icon("target"), h("span", { text: I.t("ac.sample") })]),
       h("div", { class: "shares" }, [
         (a.sample.top_upstreams && a.sample.top_upstreams.length) ? K.shareGroup(I.t(a.direction === "outgoing" ? "ac.egressupstreams" : "ac.ingressupstreams"), a.sample.top_upstreams, { src: true, total: a.sample.total_packets }) : null,
+        openPeering,
         K.shareGroup(I.t(a.direction === "outgoing" ? "ac.topdest" : "ac.topsources"), a.sample.top_sources, { src: true }),
         K.shareGroup(I.t("ac.topdstports"), a.sample.top_dst_ports, {})
       ])
