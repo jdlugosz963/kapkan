@@ -78,6 +78,8 @@ type Flow struct {
 	OutIf   uint32
 	SrcVLAN uint32
 	DstVLAN uint32
+	SrcMAC  [6]byte
+	DstMAC  [6]byte
 	SrcPort uint16
 	DstPort uint16
 	// IPProto is the IP protocol number (6 TCP, 17 UDP, ...).

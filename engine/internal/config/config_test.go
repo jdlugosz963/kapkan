@@ -1554,6 +1554,42 @@ func TestVLANAttribution(t *testing.T) {
 	}
 }
 
+func TestOpenPeeringVLANMembers(t *testing.T) {
+	raw := withAttribution(validYAML, "  mode: vlan\n  vlans:\n    - {exporter: \"10.1.32.2\", vlan: 992, name: \"EPIX\"}\n")
+	raw = strings.Replace(raw, "networks:", "open_peering:\n  members:\n    - {exporter: \"10.1.32.2\", vlan: 992}\nnetworks:", 1)
+	cfg, err := Parse([]byte(raw))
+	if err != nil {
+		t.Fatalf("Parse(open peering): %v", err)
+	}
+	exporter := netip.MustParseAddr("10.1.32.2")
+	if !cfg.OpenPeeringEnabled() || !cfg.IsOpenPeeringMember(exporter, 0, 992) {
+		t.Fatal("configured VLAN is not an enabled Open Peering member")
+	}
+	if cfg.IsOpenPeeringMember(exporter, 0, 4090) {
+		t.Fatal("unconfigured VLAN is an Open Peering member")
+	}
+}
+
+func TestOpenPeeringRejectsInvalidMembers(t *testing.T) {
+	base := withAttribution(validYAML, "  mode: vlan\n  vlans:\n    - {exporter: \"10.1.32.2\", vlan: 992, name: \"EPIX\"}\n")
+	for _, tc := range []struct {
+		name   string
+		member string
+		want   string
+	}{
+		{"wrong selector", "{exporter: \"10.1.32.2\", ifindex: 12}", "vlan must be set"},
+		{"unknown vlan", "{exporter: \"10.1.32.2\", vlan: 4090}", "must be named"},
+		{"duplicate", "{exporter: \"10.1.32.2\", vlan: 992}\n    - {exporter: \"10.1.32.2\", vlan: 992}", "duplicate"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := strings.Replace(base, "networks:", "open_peering:\n  members:\n    - "+tc.member+"\nnetworks:", 1)
+			if _, err := Parse([]byte(raw)); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("Parse() error = %v, want %q", err, tc.want)
+			}
+		})
+	}
+}
+
 func TestUpstreamCapacityPools(t *testing.T) {
 	raw := withBoundary("\n" +
 		"  boundary:\n" +

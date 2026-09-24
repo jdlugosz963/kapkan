@@ -322,6 +322,7 @@ func (s *Server) Handler() http.Handler {
 		handle(pattern, s.requireRole(config.RoleOperator, h))
 	}
 	read("GET /api/v1/status", s.handleStatus)
+	read("GET /api/v1/open-peering", s.handleOpenPeering)
 	read("GET /api/v1/attacks", s.handleAttacks)
 	read("GET /api/v1/hosts", s.handleHosts)
 	read("GET /api/v1/bans", s.handleBans)
@@ -683,6 +684,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 
 	resp := map[string]any{
 		"dry_run":                 cfg.DryRun,
+		"open_peering_enabled":    cfg.OpenPeeringEnabled(),
 		"uptime_seconds":          int64(time.Since(s.start).Seconds()),
 		"active_attacks":          activeAttacks,
 		"active_bans":             activeBans,
@@ -788,6 +790,10 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+func (s *Server) handleOpenPeering(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, s.eng.OpenPeeringSnapshot())
 }
 
 func (s *Server) handleAttacks(w http.ResponseWriter, r *http.Request) {

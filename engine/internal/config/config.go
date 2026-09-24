@@ -39,6 +39,7 @@ type Config struct {
 	Listen                 Listen      `yaml:"listen"`
 	Sampling               Sampling    `yaml:"sampling"`
 	Attribution            Attribution `yaml:"attribution"`
+	OpenPeering            OpenPeering `yaml:"open_peering"`
 	// FlowSources optionally allowlists the trusted flow-exporter source
 	// addresses. Telemetry arrives over unauthenticated UDP, so the exporter
 	// (source) address is spoofable; when this list is set, only telemetry
@@ -119,6 +120,7 @@ type Config struct {
 	boundary              map[netip.Addr]exporterBoundary `yaml:"-"`
 	interfaceAttribution  map[string]string               `yaml:"-"`
 	vlanAttribution       map[string]string               `yaml:"-"`
+	openPeeringMembers    map[string]string               `yaml:"-"`
 	upstreamCapacityPools []ResolvedUpstreamCapacityPool  `yaml:"-"`
 	// Groups are the resolved hostgroups; Groups[0] is always the implicit
 	// global fallback group carrying the top-level thresholds.
@@ -215,6 +217,16 @@ type VLANAttribution struct {
 	Exporter string `yaml:"exporter"`
 	VLAN     uint32 `yaml:"vlan"`
 	Name     string `yaml:"name"`
+}
+
+type OpenPeering struct {
+	Members []OpenPeeringMember `yaml:"members"`
+}
+
+type OpenPeeringMember struct {
+	Exporter string `yaml:"exporter"`
+	Ifindex  uint32 `yaml:"ifindex,omitempty"`
+	VLAN     uint32 `yaml:"vlan,omitempty"`
 }
 
 // UpstreamCapacityPool is a shared physical or contracted bandwidth pool.
@@ -1735,6 +1747,9 @@ func (c *Config) validate() error {
 		return fmt.Errorf("sampling.default_rate must be >= 1, got %d", c.Sampling.DefaultRate)
 	}
 	if err := c.resolveAttribution(); err != nil {
+		return err
+	}
+	if err := c.resolveOpenPeering(); err != nil {
 		return err
 	}
 	if err := c.resolveBoundary(); err != nil {
@@ -3664,6 +3679,57 @@ func attributionAddressKey(exporter string, number uint32) (string, error) {
 		return "", fmt.Errorf("exporter: invalid IP %q: %w", exporter, err)
 	}
 	return addr.Unmap().String() + ":" + strconv.FormatUint(uint64(number), 10), nil
+}
+
+func (c *Config) resolveOpenPeering() error {
+	c.openPeeringMembers = make(map[string]string, len(c.OpenPeering.Members))
+	for i, member := range c.OpenPeering.Members {
+		if c.Attribution.Mode == "vlan" {
+			if member.VLAN == 0 || member.Ifindex != 0 {
+				return fmt.Errorf("open_peering.members[%d]: vlan must be set and ifindex omitted in vlan mode", i)
+			}
+		} else if member.Ifindex == 0 || member.VLAN != 0 {
+			return fmt.Errorf("open_peering.members[%d]: ifindex must be set and vlan omitted in interface mode", i)
+		}
+		number := member.Ifindex
+		labels := c.interfaceAttribution
+		kind := "interface"
+		if c.Attribution.Mode == "vlan" {
+			number = member.VLAN
+			labels = c.vlanAttribution
+			kind = "vlan"
+		}
+		key, err := attributionAddressKey(member.Exporter, number)
+		if err != nil {
+			return fmt.Errorf("open_peering.members[%d]: %w", i, err)
+		}
+		label, found := labels[key]
+		if !found {
+			return fmt.Errorf("open_peering.members[%d]: %s %d must be named in attribution.%ss", i, kind, number, kind)
+		}
+		if _, duplicate := c.openPeeringMembers[key]; duplicate {
+			return fmt.Errorf("open_peering.members: duplicate exporter/%s %q", kind, key)
+		}
+		c.openPeeringMembers[key] = label
+	}
+	return nil
+}
+
+func (c *Config) OpenPeeringEnabled() bool { return len(c.openPeeringMembers) > 0 }
+
+func (c *Config) IsOpenPeeringMember(exporter netip.Addr, iface, vlan uint32) bool {
+	_, found := c.OpenPeeringMember(exporter, iface, vlan)
+	return found
+}
+
+func (c *Config) OpenPeeringMember(exporter netip.Addr, iface, vlan uint32) (string, bool) {
+	number := iface
+	if c.Attribution.Mode == "vlan" {
+		number = vlan
+	}
+	key := exporter.Unmap().String() + ":" + strconv.FormatUint(uint64(number), 10)
+	label, found := c.openPeeringMembers[key]
+	return label, found
 }
 
 // resolveUpstreamCapacityPools resolves pool members to their boundary labels.

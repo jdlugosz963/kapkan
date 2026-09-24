@@ -98,6 +98,21 @@ func do(t *testing.T, h http.Handler, method, path, body string) *httptest.Respo
 	return rec
 }
 
+func TestOpenPeeringDisabledResponse(t *testing.T) {
+	s := testServer(t, storeFromYAML(t, apiYAML))
+	rec := do(t, s.Handler(), http.MethodGet, "/api/v1/open-peering", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	var snapshot engine.OpenPeeringSnapshot
+	if err := json.Unmarshal(rec.Body.Bytes(), &snapshot); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if snapshot.Enabled || snapshot.Ingress.Quality != "unavailable" || snapshot.Ingress.TopMACs == nil {
+		t.Fatalf("snapshot = %+v, want stable disabled response", snapshot)
+	}
+}
+
 type fakeQuerier struct {
 	pts         []storage.TrafficPoint
 	err         error
@@ -998,6 +1013,7 @@ func TestDashboardServing(t *testing.T) {
 		{"/views2.js", "V.edge = edge;"},
 		{"/views2.js", "V.edgenodes = edgeNodes;"},
 		{"/views2.js", "V.nodes = nodes;"},
+		{"/open-peering.js", "V[\"open-peering\"] = openPeering;"},
 		{"/locales/en.js", "w.KAPKAN_LOCALES.en ="},
 	} {
 		rec := reqWith(h, http.MethodGet, a.path, "", "", "")

@@ -1023,6 +1023,31 @@
       },
       "type": "object"
     },
+    "open_peering": {
+      "additionalProperties": false,
+      "properties": {
+        "members": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "exporter": {
+                "type": "string"
+              },
+              "ifindex": {
+                "type": "integer"
+              },
+              "vlan": {
+                "type": "integer"
+              }
+            },
+            "type": "object"
+          },
+          "type": "array",
+          "x-optional": true
+        }
+      },
+      "type": "object"
+    },
     "protected_whitelist": {
       "items": {
         "type": "string"

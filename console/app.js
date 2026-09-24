@@ -10,6 +10,7 @@
     { id: "attacks", icon: "alert", key: "nav.attacks", section: "monitor", count: "attacks" },
     { id: "bans", icon: "ban", key: "nav.bans", section: "monitor", count: "bans" },
     { id: "hosts", icon: "server", key: "nav.hosts", section: "monitor" },
+    { id: "open-peering", icon: "activity", key: "nav.open_peering", section: "monitor", whenOpenPeering: true },
     /* shown only when /status reports nodes_total > 0 — most deployments have
        no managed scrubbing nodes and must not carry a permanently-empty view */
     { id: "nodes", icon: "divert", key: "nav.nodes", section: "monitor", whenNodes: true },
@@ -120,6 +121,7 @@
         bans = API.getBans(), groups = API.getHostgroups(), networks = API.getNetworks(), agg = API.aggregate();
     return {
       status: status, attacks: attacks, hosts: hosts, bans: bans, groups: groups, networks: networks,
+      openPeering: API.getOpenPeering(),
       agg: agg, buf: state.buf, posture: derivePosture(attacks), dryRun: status.dry_run, role: state.role,
       state: state, actions: actions
     };
@@ -149,7 +151,7 @@
       /* node-gated items start hidden so a zero-node deployment never sees
          them flash before the first /status answer; renderShellDynamic
          reveals them (CSSOM, not a style attribute — CSP style-src 'self') */
-      if ((item.whenNodes || item.whenEdge) && state.view !== item.id) btn.style.display = "none";
+      if ((item.whenNodes || item.whenEdge || item.whenOpenPeering) && state.view !== item.id) btn.style.display = "none";
       nav.appendChild(btn);
     });
 
@@ -244,8 +246,9 @@
     /* node-gated nav items: hidden until /status reports managed nodes, but
        never hidden out from under the operator who is LOOKING at the view */
     NAV.forEach(function (item) {
-      if (!item.whenNodes && !item.whenEdge) return;
-      var have = item.whenNodes ? ctx.status.nodes_total > 0 : ctx.status.edge_nodes_total > 0;
+      if (!item.whenNodes && !item.whenEdge && !item.whenOpenPeering) return;
+      var have = item.whenNodes ? ctx.status.nodes_total > 0
+        : item.whenEdge ? ctx.status.edge_nodes_total > 0 : ctx.status.open_peering_enabled;
       var el = document.querySelector('.nav__item[data-view="' + item.id + '"]');
       if (el) el.style.display = (have || state.view === item.id) ? "" : "none";
     });

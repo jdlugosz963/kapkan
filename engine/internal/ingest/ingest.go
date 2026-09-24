@@ -9,6 +9,7 @@
 package ingest
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -27,6 +28,15 @@ import (
 	protoproducer "github.com/netsampler/goflow2/v2/producer/proto"
 	"github.com/netsampler/goflow2/v2/utils"
 	"github.com/netsampler/goflow2/v2/utils/debug"
+	"google.golang.org/protobuf/encoding/protowire"
+)
+
+const (
+	netFlowInSrcMACField  protowire.Number = 1001
+	netFlowInDstMACField  protowire.Number = 1002
+	netFlowOutSrcMACField protowire.Number = 1003
+	netFlowOutDstMACField protowire.Number = 1004
+	netFlowDirectionField protowire.Number = 1005
 )
 
 // SinkFunc receives each normalized flow. It is called concurrently by the
@@ -51,7 +61,7 @@ type Ingester struct {
 // are honored, with the configured default applied as a fallback during
 // conversion.
 func New(store *config.Store, sink SinkFunc, log *slog.Logger) (*Ingester, error) {
-	cfg, err := (&protoproducer.ProducerConfig{}).Compile()
+	cfg, err := netFlowProducerConfig().Compile()
 	if err != nil {
 		return nil, fmt.Errorf("compile producer config: %w", err)
 	}
@@ -77,6 +87,28 @@ func New(store *config.Store, sink SinkFunc, log *slog.Logger) (*Ingester, error
 	prod = debug.WrapPanicProducer(prod)
 	ing.prod = prod
 	return ing, nil
+}
+
+func netFlowProducerConfig() *protoproducer.ProducerConfig {
+	protobufFields := []protoproducer.ProtobufFormatterConfig{
+		{Name: "KapkanInSrcMAC", Index: int32(netFlowInSrcMACField), Type: "varint"},
+		{Name: "KapkanInDstMAC", Index: int32(netFlowInDstMACField), Type: "varint"},
+		{Name: "KapkanOutSrcMAC", Index: int32(netFlowOutSrcMACField), Type: "varint"},
+		{Name: "KapkanOutDstMAC", Index: int32(netFlowOutDstMACField), Type: "varint"},
+		{Name: "KapkanDirection", Index: int32(netFlowDirectionField), Type: "varint"},
+	}
+	mappings := []protoproducer.NetFlowMapField{
+		{Type: netflow.NFV9_FIELD_IN_SRC_MAC, Destination: "KapkanInSrcMAC", Endian: protoproducer.BigEndian},
+		{Type: netflow.NFV9_FIELD_IN_DST_MAC, Destination: "KapkanInDstMAC", Endian: protoproducer.BigEndian},
+		{Type: netflow.NFV9_FIELD_OUT_SRC_MAC, Destination: "KapkanOutSrcMAC", Endian: protoproducer.BigEndian},
+		{Type: netflow.NFV9_FIELD_OUT_DST_MAC, Destination: "KapkanOutDstMAC", Endian: protoproducer.BigEndian},
+		{Type: netflow.NFV9_FIELD_DIRECTION, Destination: "KapkanDirection", Endian: protoproducer.BigEndian},
+	}
+	return &protoproducer.ProducerConfig{
+		Formatter: protoproducer.FormatterConfig{Protobuf: protobufFields},
+		NetFlowV9: protoproducer.NetFlowV9ProducerConfig{Mapping: mappings},
+		IPFIX:     protoproducer.IPFIXProducerConfig{Mapping: mappings},
+	}
 }
 
 // dropCounter implements utils.ReceiverCallback, recording UDP queue drops.
@@ -283,6 +315,19 @@ func convert(pm *protoproducer.ProtoProducerMessage, defaultRate uint64) (flow.F
 	}
 	src, _ := netip.AddrFromSlice(pm.SrcAddr)
 	exporter, _ := netip.AddrFromSlice(pm.SamplerAddress)
+	srcMACValue := mappedNetFlowVarint(pm, netFlowInSrcMACField)
+	dstMACValue := mappedNetFlowVarint(pm, netFlowInDstMACField)
+	direction := mappedNetFlowVarint(pm, netFlowDirectionField)
+	if direction == 1 {
+		srcMACValue = mappedNetFlowVarint(pm, netFlowOutSrcMACField)
+		dstMACValue = mappedNetFlowVarint(pm, netFlowOutDstMACField)
+	}
+	// Protocols without custom NetFlow mappings retain goflow2's standard pair.
+	if srcMACValue == 0 && dstMACValue == 0 && pm.Type != flowpb.FlowMessage_NETFLOW_V9 && pm.Type != flowpb.FlowMessage_IPFIX {
+		srcMACValue, dstMACValue = pm.SrcMac, pm.DstMac
+	}
+	srcMAC := macFromUint64(srcMACValue)
+	dstMAC := macFromUint64(dstMACValue)
 
 	rate := pm.SamplingRate
 	if rate == 0 {
@@ -303,6 +348,8 @@ func convert(pm *protoproducer.ProtoProducerMessage, defaultRate uint64) (flow.F
 		OutIf:        pm.OutIf,
 		SrcVLAN:      pm.SrcVlan,
 		DstVLAN:      pm.DstVlan,
+		SrcMAC:       srcMAC,
+		DstMAC:       dstMAC,
 		SrcPort:      uint16(pm.SrcPort),
 		DstPort:      uint16(pm.DstPort),
 		IPProto:      uint8(pm.Proto),
@@ -310,6 +357,34 @@ func convert(pm *protoproducer.ProtoProducerMessage, defaultRate uint64) (flow.F
 		Fragment:     pm.FragmentOffset > 0,
 		Wire:         wireProto(pm.Type),
 	}, true
+}
+
+func macFromUint64(value uint64) [6]byte {
+	var mac [6]byte
+	var encoded [8]byte
+	binary.BigEndian.PutUint64(encoded[:], value)
+	copy(mac[:], encoded[2:])
+	return mac
+}
+
+func mappedNetFlowVarint(pm *protoproducer.ProtoProducerMessage, field protowire.Number) uint64 {
+	raw := pm.ProtoReflect().GetUnknown()
+	for len(raw) > 0 {
+		number, wireType, tagLength := protowire.ConsumeTag(raw)
+		fieldLength := protowire.ConsumeFieldValue(number, wireType, raw[tagLength:])
+		if tagLength < 0 || fieldLength < 0 {
+			return 0
+		}
+		if number == field && wireType == protowire.VarintType {
+			value, valueLength := protowire.ConsumeVarint(raw[tagLength:])
+			if valueLength > 0 {
+				return value
+			}
+			return 0
+		}
+		raw = raw[tagLength+fieldLength:]
+	}
+	return 0
 }
 
 func wireProto(t flowpb.FlowMessage_FlowType) flow.Proto {
@@ -347,7 +422,7 @@ func splitListen(listen string) (string, int, error) {
 // newDecodeProducer exposes the conversion producer for tests that drive a
 // pipe directly without a UDP socket.
 func newDecodeProducer(store *config.Store, sink SinkFunc) producer.ProducerInterface {
-	cfg, _ := (&protoproducer.ProducerConfig{}).Compile()
+	cfg, _ := netFlowProducerConfig().Compile()
 	inner, _ := protoproducer.CreateProtoProducer(cfg, protoproducer.CreateSamplingSystem)
 	return debug.WrapPanicProducer(&flowProducer{
 		inner:     inner,

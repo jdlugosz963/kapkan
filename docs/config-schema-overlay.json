@@ -22,6 +22,10 @@
     "attribution.vlans.vlan": { "tier": "advanced", "description": "VLAN number reported by the exporter." },
     "attribution.vlans.name": { "tier": "advanced", "description": "Operator-facing VLAN name." },
 
+    "open_peering.members.exporter": { "tier": "advanced", "format": "ip", "description": "Exporter whose selected interface or VLAN carries Open Peering traffic." },
+    "open_peering.members.ifindex": { "tier": "advanced", "description": "Open Peering interface in interface attribution mode. It must be named in attribution.interfaces; omit it in VLAN mode." },
+    "open_peering.members.vlan": { "tier": "advanced", "description": "Open Peering VLAN in VLAN attribution mode. It must be named in attribution.vlans; omit it in interface mode." },
+
     "networks": { "tier": "basic", "format": "cidr", "crossField": "Prefixes must not overlap each other. Detection applies ONLY to destinations inside these.", "description": "Protected prefixes." },
     "protected_whitelist": { "tier": "basic", "format": "ip", "description": "Addresses that are never banned, regardless of traffic (gateways, nameservers)." },
     "flow_sources": { "tier": "advanced", "format": "ip", "description": "Optional allowlist of trusted flow-exporter source addresses; bounds metric cardinality, does not affect detection." },

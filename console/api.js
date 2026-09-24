@@ -26,7 +26,10 @@
     bansActive: [],
     bansHistory: [],
     groups: [],
-    networks: []
+    networks: [],
+    openPeering: { enabled: false, window_seconds: 0,
+      ingress: { top_macs: [], quality: "unavailable" },
+      egress: { top_macs: [], quality: "unavailable" } }
   };
   /* rejected manual bans aren't in GET /bans (rejections are returned by POST
      /ban as a 409 body); keep them client-side so the history shows them. */
@@ -266,9 +269,10 @@
       getJSON("/api/v1/status"),
       getJSON("/api/v1/attacks"),
       getJSON("/api/v1/hosts"),
-      getJSON("/api/v1/bans")
+      getJSON("/api/v1/bans"),
+      getJSON("/api/v1/open-peering")
     ]).then(function (r) {
-      var status = r[0], attacks = r[1], hostsResp = r[2], bansResp = r[3];
+      var status = r[0], attacks = r[1], hostsResp = r[2], bansResp = r[3], openPeering = r[4];
       var groups = (status.hostgroups || []).map(mapGroup);
       var bansRaw = bansResp.bans || [];
 
@@ -310,6 +314,8 @@
         /* edge nodes, COUNT only, for every role: gates the Edge view (E4.5) */
         edge_nodes_total: status.edge_nodes_total || 0
       };
+	  cache.status.open_peering_enabled = !!status.open_peering_enabled;
+	  cache.openPeering = openPeering || cache.openPeering;
       cache.attacks = {
         active: (attacks.active || []).map(function (a) { return mapAttack(a, groups, bansRaw); }),
         recent: (attacks.recent || []).map(function (a) { return mapAttack(a, groups, bansRaw); })
@@ -332,6 +338,7 @@
     getBans: function () { return { active: cache.bansActive, history: rejections.concat(cache.bansHistory) }; },
     getHostgroups: function () { return cache.groups; },
     getNetworks: function () { return cache.networks; },
+    getOpenPeering: function () { return cache.openPeering; },
     /* historical traffic for one host (Traffic/Reports view). Resolves to
        {available:false} when the engine has no ClickHouse storage. */
     /* scrubbing-node inventory (Nodes view). Fetched on demand — app.js holds

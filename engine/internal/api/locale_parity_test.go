@@ -220,7 +220,7 @@ func TestLocaleParityParserSelfCheck(t *testing.T) {
 		{"units", 0, 4},
 		{"plurals", 1, 13},
 		{"plurals", 0, 26},  // 13 keys × {one, other}: 5 + edgeNodesUp, edgeWatchOnlyNodes, edgeReportingNodes, edgeActiveOnNodes, edgeBitingNodes + edgeH3ReadyNodes, edgeH3StillServing (E5.5) + edgeUnboundTokens (E6.7)
-		{"strings", 0, 450}, // +23: nav.nodes, col.node, nd.*; +32: nav.edge, ed.* (E4.5); +12: ed.h3* (E5.5); +34: ed.tenant/placement + nav.edgenodes + en.* (E6.7 fleet); +36: ed.hist/srcs/ev/state (E6.7 history); +34: ed.lever.* (E6.8); +2: ho.top10/notraffic; +1: btn.docs; +2: se.docs; +3: ov upstream metric
+		{"strings", 0, 470}, // +23: nav.nodes, col.node, nd.*; +32: nav.edge, ed.* (E4.5); +12: ed.h3* (E5.5); +34: ed.tenant/placement + nav.edgenodes + en.* (E6.7 fleet); +36: ed.hist/srcs/ev/state (E6.7 history); +34: ed.lever.* (E6.8); +2: ho.top10/notraffic; +1: btn.docs; +2: se.docs; +3: ov upstream metric; +20: Open Peering
 		{"enums", 1, 9},
 		{"enums", 0, 59}, // +16: edgeEventKind (E6.7)
 		{"enumsShort", 1, 1},

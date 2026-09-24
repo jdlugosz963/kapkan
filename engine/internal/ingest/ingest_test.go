@@ -10,7 +10,10 @@ import (
 	"github.com/kapkan-io/kapkan/internal/flow"
 	"github.com/kapkan-io/kapkan/pkg/flowgen"
 
+	flowpb "github.com/netsampler/goflow2/v2/pb"
+	protoproducer "github.com/netsampler/goflow2/v2/producer/proto"
 	"github.com/netsampler/goflow2/v2/utils"
+	"google.golang.org/protobuf/encoding/protowire"
 )
 
 const ingestYAML = `
@@ -158,6 +161,58 @@ func TestConvertNetFlowAppliesDefaultRate(t *testing.T) {
 	if f.Bytes != 1500 || f.Packets != 3 {
 		t.Errorf("bytes/packets = %d/%d, want 1500/3", f.Bytes, f.Packets)
 	}
+}
+
+func TestConvertCopiesMACAddresses(t *testing.T) {
+	pm := &protoproducer.ProtoProducerMessage{FlowMessage: flowpb.FlowMessage{
+		SrcAddr: []byte{192, 0, 2, 10},
+		DstAddr: []byte{203, 0, 113, 5},
+		Type:    flowpb.FlowMessage_NETFLOW_V9,
+	}}
+	appendMappedVarint(pm, netFlowInSrcMACField, 0x001122334455)
+	appendMappedVarint(pm, netFlowInDstMACField, 0xaabbccddeeff)
+
+	f, ok := convert(pm, 1)
+	if !ok {
+		t.Fatal("convert() rejected valid flow")
+	}
+	if want := ([6]byte{0x00, 0x11, 0x22, 0x33, 0x44, 0x55}); f.SrcMAC != want {
+		t.Errorf("SrcMAC = %x, want %x", f.SrcMAC, want)
+	}
+	if want := ([6]byte{0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff}); f.DstMAC != want {
+		t.Errorf("DstMAC = %x, want %x", f.DstMAC, want)
+	}
+}
+
+func TestConvertSelectsPostMACsForEgressRecord(t *testing.T) {
+	pm := &protoproducer.ProtoProducerMessage{FlowMessage: flowpb.FlowMessage{
+		SrcAddr: []byte{185, 225, 248, 137},
+		DstAddr: []byte{185, 241, 198, 173},
+		Type:    flowpb.FlowMessage_NETFLOW_V9,
+	}}
+	appendMappedVarint(pm, netFlowInSrcMACField, 0)
+	appendMappedVarint(pm, netFlowInDstMACField, 0)
+	appendMappedVarint(pm, netFlowOutSrcMACField, 0xb4e9b8cd029c)
+	appendMappedVarint(pm, netFlowOutDstMACField, 0xa0bc6f098e4d)
+	appendMappedVarint(pm, netFlowDirectionField, 1)
+
+	f, ok := convert(pm, 1)
+	if !ok {
+		t.Fatal("convert() rejected valid egress record")
+	}
+	if want := ([6]byte{0xb4, 0xe9, 0xb8, 0xcd, 0x02, 0x9c}); f.SrcMAC != want {
+		t.Errorf("SrcMAC = %x, want post source %x", f.SrcMAC, want)
+	}
+	if want := ([6]byte{0xa0, 0xbc, 0x6f, 0x09, 0x8e, 0x4d}); f.DstMAC != want {
+		t.Errorf("DstMAC = %x, want post destination %x", f.DstMAC, want)
+	}
+}
+
+func appendMappedVarint(pm *protoproducer.ProtoProducerMessage, field protowire.Number, value uint64) {
+	raw := pm.ProtoReflect().GetUnknown()
+	raw = protowire.AppendTag(raw, field, protowire.VarintType)
+	raw = protowire.AppendVarint(raw, value)
+	pm.ProtoReflect().SetUnknown(raw)
 }
 
 func TestConvertNetFlowReportedRateWins(t *testing.T) {

@@ -277,7 +277,8 @@ type Engine struct {
 
 	// geo optionally attributes sample sources to ASN/country. nil disables
 	// enrichment; the resolver is read-only and safe for concurrent use.
-	geo geoip.Resolver
+	geo         geoip.Resolver
+	openPeering openPeeringAccumulator
 
 	events chan Event
 	// ongoing carries AttackOngoing heartbeats on a SEPARATE channel from the
@@ -363,6 +364,7 @@ func New(store *config.Store, opts ...Option) *Engine {
 	// buffer; heartbeat drops self-heal, so this need not be large.
 	e.ongoing = make(chan Event, cap(e.events))
 	e.ringSize = int(e.windowSec) + 1
+	e.openPeering.ring = make([]openPeeringBucket, e.ringSize)
 	sampleCfg := store.Get().SampleCfg
 	perShard := 0
 	if sampleCfg.Enabled {
@@ -429,16 +431,24 @@ func (e *Engine) Process(f flow.Flow) {
 		}
 		if r, ok := cfg.InboundRate(f.Exporter, f.InIf, flowVLAN(&f), rate); ok {
 			e.record(f.DstAddr, dirIn, f, r, epoch, attributionKey(cfg, &f, f.InIf))
+			if member, ok := cfg.OpenPeeringMember(f.Exporter, f.InIf, flowVLAN(&f)); ok {
+				e.openPeering.record(dirIn, epoch, member, f.SrcMAC, f.Bytes, f.Packets, r)
+			}
 		}
 	}
-	if cfg.OutgoingEnabled && f.SrcAddr.IsValid() && cfg.InNetworks(f.SrcAddr) {
+	if (cfg.OutgoingEnabled || cfg.OpenPeeringEnabled()) && f.SrcAddr.IsValid() && cfg.InNetworks(f.SrcAddr) {
 		if debug {
 			metrics.BoundaryDebugBytes.WithLabelValues(
 				f.Exporter.String(), strconv.FormatUint(uint64(f.OutIf), 10), "out",
 			).Add(float64(f.Bytes * rate))
 		}
 		if r, ok := cfg.OutboundRate(f.Exporter, f.OutIf, flowVLAN(&f), rate); ok {
-			e.record(f.SrcAddr, dirOut, f, r, epoch, attributionKey(cfg, &f, f.OutIf))
+			if cfg.OutgoingEnabled {
+				e.record(f.SrcAddr, dirOut, f, r, epoch, attributionKey(cfg, &f, f.OutIf))
+			}
+			if member, ok := cfg.OpenPeeringMember(f.Exporter, f.OutIf, flowVLAN(&f)); ok {
+				e.openPeering.record(dirOut, epoch, member, f.DstMAC, f.Bytes, f.Packets, r)
+			}
 		}
 	}
 }

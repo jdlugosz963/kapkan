@@ -31,20 +31,21 @@ The Huawei S6750 `KAPKAN-V2` NetStream record is attached inbound and outbound t
 - sampler information.
 
 A packet capture supplied by the operator confirms that VLAN 992 carries multiple MAC values.
-Observed behavior is direction-specific:
+Observed behavior is direction-specific. NetFlow `Direction` describes the
+observation point, not Kapkan's direction relative to the protected network:
 
 - ingress `Source Mac Address` was consistently `a0:bc:6f:09:8e:4d` in the sample;
-- egress `Post Source Mac Address` contained many distinct peer MAC addresses.
+- records with `Direction=1` carry the usable peer in `Post Source Mac Address`; when their IP
+  destination is protected, Kapkan classifies that traffic as ingress.
 
 Therefore:
 
-- egress peer ranking can use `Post Source Mac Address`;
-- ingress peer ranking must not blindly use `Source Mac Address`, because the captured value is a
-  single common MAC and does not identify peers;
-- the correct ingress field (`Destination Mac Address` or `Post Destination Mac Address`) must be
-  verified with the same VLAN/direction capture before implementing the ingress ranking.
+- `Direction=1` records must use the post-output MAC pair;
+- `Direction=0` records must use the ordinary input MAC pair;
+- after that per-record selection, Kapkan ingress ranks source MAC and Kapkan egress ranks
+  destination MAC.
 
-This is a release gate. The UI must not present a common router/switch MAC as a peer ranking.
+The UI must not present a common router/switch MAC as a peer ranking.
 
 ## Current data-path gap
 

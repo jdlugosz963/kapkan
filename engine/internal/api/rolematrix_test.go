@@ -94,6 +94,7 @@ edge:
 		allowed map[string]bool
 	}{
 		{"GET", "/api/v1/status", "", "", map[string]bool{"viewer": true, "operator": true, "scoped": true}},
+		{"GET", "/api/v1/open-peering", "", "", map[string]bool{"viewer": true, "operator": true, "scoped": true}},
 		{"GET", "/api/v1/attacks", "", "", map[string]bool{"viewer": true, "operator": true, "scoped": true}},
 		{"GET", "/api/v1/hosts", "", "", map[string]bool{"viewer": true, "operator": true, "scoped": true}},
 		{"GET", "/api/v1/bans", "", "", map[string]bool{"viewer": true, "operator": true, "scoped": true}},
