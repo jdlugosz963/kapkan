@@ -12,5 +12,5 @@ export const site = {
   // Public GitHub repository. The Go module path is github.com/kapkan-io/kapkan
   // (see go.mod), but the repo is published under fornex/kapkan — keep this in
   // sync with the actual repository URL.
-  repo: "https://github.com/fornex/kapkan",
+  repo: "https://github.com/jdlugosz963/kapkan",
 } as const;
