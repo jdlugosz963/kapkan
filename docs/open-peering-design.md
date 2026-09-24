@@ -1,8 +1,9 @@
 # Open Peering view - design assumptions
 
-Status: proposed
+Status: implemented
 
-Scope: Kapkan DEV first. Production configuration must remain unchanged.
+Scope: Kapkan DEV and production. Production uses the S6750 exporter `172.16.7.11` in VLAN
+attribution mode and receives the cutover stream on UDP/2055.
 
 ## Goal
 
@@ -47,21 +48,19 @@ Therefore:
 
 The UI must not present a common router/switch MAC as a peer ranking.
 
-## Current data-path gap
+## Implemented data path
 
-`goflow2` decodes NetFlow v9 MAC information, but Kapkan currently drops it when converting
-`ProtoProducerMessage` to `flow.Flow`. The normalized record contains VLAN and interface fields
-but no MAC fields.
+NetFlow MAC fields are carried through ingestion into the normalized `flow.Flow`. The engine
+selects the peer MAC according to the attack direction and aggregates it after the existing
+boundary decision.
 
-Implementation must carry MAC information through ingestion before aggregation is possible.
-Because `goflow2` currently maps input and post-output MAC information into the same protobuf
-`SrcMac`/`DstMac` fields, implementation must first confirm that its resulting values preserve the
-required direction semantics. If they do not, the decoder boundary must retain the distinct
-NetFlow information elements instead of guessing from the merged fields.
+The resulting distribution is kept in the live OpenPeering window and in the attack sample.
+The sample is immutable once the attack starts and is reused by the API, UI, callbacks and
+history; direction-specific MAC selection is already covered by the engine tests.
 
 ## Configuration contract
 
-Proposed top-level configuration:
+Top-level configuration:
 
 ```yaml
 open_peering:
@@ -92,8 +91,15 @@ Validation rules:
 7. Each member must exist in the corresponding `attribution.vlans` or
    `attribution.interfaces` list, so the UI always has an operator-facing label.
 8. Open Peering classification is independent of capacity pools. A member may belong to both.
-9. Production `/etc/kapkan/config.yaml` is not changed. Initial enablement is only in the DEV
-   overlay for exporter `172.16.7.11` and VLANs 992, 4090, 2812, and 2813.
+9. Production can enable the feature in interface attribution mode. The current production
+  mapping uses `172.16.7.110/13` and `172.16.7.100/66` for OP EPIX Warszawa; the DEV overlay
+  uses VLAN attribution for exporter `172.16.7.11`.
+
+The optional `mac_ip_mapping` collector reads the IPv4 ARP table from configured SNMP v2c
+routers. Its community is read from `community_env`, it refreshes every 60 seconds by default,
+and the current result is held in memory rather than persisted. The IP is the router's observed
+neighbor address; it identifies the OpenPeering node/operator, not necessarily the participant
+behind that node.
 
 ## Direction and matching semantics
 
@@ -308,11 +314,10 @@ strings. Locale parity tests must remain green.
 3. Implement configuration and validation without enabling it anywhere.
 4. Implement the isolated engine accumulator and API.
 5. Implement the isolated console view.
-6. Enable only in `/home/serwis/kapkan-dev/config.yaml` for exporter `172.16.7.11` and the four
-   VLANs.
-7. Compare aggregate Open Peering ingress/egress rates with the existing per-VLAN totals.
-8. Validate TOP20 against tshark output and inspect unknown share.
-9. Leave production configuration untouched until DEV behavior is explicitly accepted.
+6. Enable in DEV with VLAN attribution, validate aggregate rates and inspect unknown share.
+7. Enable production with the S6750 exporter `172.16.7.11`, sampling `1:1024`, VLAN attribution,
+  and UDP/2055 after the device cutover.
+8. Validate TOP20 and attack `sample.open_peering` against the switch export and SNMP MAC-IP data.
 
 ## Acceptance criteria
 
@@ -323,4 +328,5 @@ strings. Locale parity tests must remain green.
   `a0:bc:6f:09:8e:4d` value.
 - Unknown traffic is visible and included in totals.
 - Excluded VLANs and boundary-rejected traffic never appear.
-- No production configuration changes are made.
+- Production and DEV use the same MAC/IP and attack-sample contract; only their exporter, port and
+  environment-specific attribution differ.

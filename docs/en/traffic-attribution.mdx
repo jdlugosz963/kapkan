@@ -131,6 +131,37 @@ When attack sampling is enabled, `GET /api/v1/attacks` and the attack detail vie
 }
 ```
 
+When the matching upstream is an OpenPeering member, the same attack sample also contains
+`sample.open_peering`. It is grouped by configured member and includes the sampling-corrected
+MAC distribution; each MAC can include the current SNMP-resolved IP addresses. The snapshot is
+limited to flows belonging to that attack target and direction, not the global live OpenPeering
+window:
+
+```json
+{
+  "sample": {
+    "open_peering": [
+      {
+        "member": "VLAN 992 (OP EPIX Warszawa)",
+        "packets": 2048,
+        "macs": [
+          {
+            "mac": "04:f8:f8:a4:e9:de",
+            "ips": ["89.46.145.224"],
+            "packets": 2048,
+            "bytes": 3006464
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+The same member/MAC(IP) distribution is visible in the live attack detail while the attack is
+active and in its historical record after it ends. The IP identifies the router-observed
+OpenPeering node/operator; it is not automatically the participant's identity.
+
 Unlike the live host arrays, attack entries are sampled counters, not rates. `packets` and `bytes`
 are sampling-corrected totals captured around detection. Calculate a displayed packet share as
 `item.packets / sample.total_packets`; `total_packets` is untruncated even when the top list omits

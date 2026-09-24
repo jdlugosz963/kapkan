@@ -75,6 +75,7 @@ Kapkan reads the value from the process environment at load time:
 - `notify.telegram.token_env` — the Telegram bot token.
 - `notify.email.username_env` / `notify.email.password_env` — SMTP credentials.
 - `storage.clickhouse.username_env` / `password_env` — ClickHouse credentials.
+- `mac_ip_mapping.routers[].community_env` — an SNMP v2c community for the configured router.
 - `api.token_env` (or each `api.tokens[].token_env`) — the REST API / dashboard bearer token(s).
 
 With the systemd unit, these live in an `EnvironmentFile` such as `/etc/kapkan/kapkan.env`
@@ -106,12 +107,14 @@ refinement.
 | `detection_window_seconds` | Sliding window used to calculate per-second traffic rates (`1`–`60`, default `5`). Longer windows smooth bursty flow exports but delay and dilute detection. Requires a restart. |
 | `listen.sflow` / `listen.netflow` | UDP listen addresses. NetFlow v5/v9 and IPFIX share the `netflow` socket. At least one listener is required. See [How it works](/docs/how-it-works). |
 | `sampling.default_rate` | Sampling rate used when an exporter does not report its own. Must be `>= 1`. |
-| `sampling.boundary` | Optional per-exporter interface-boundary counting that deduplicates a flow seen at multiple sampling vantage points (redundant exporters, ingress+egress sampling, transit links). Each entry gives an exporter's `external_ifindexes` (and optional `egress_sampling`); a flow is then counted only when it crosses an external interface. Exporters without an entry count every sample. See Sampling correction below. |
+| `sampling.boundary` | Optional per-exporter boundary counting that deduplicates a flow seen at multiple sampling vantage points and can exclude internal VLANs. Each entry may use `external_ifindexes`, `excluded_vlans`, or both; `egress_sampling` is an optional calibration correction. Exporters without an entry count every sample. See Sampling correction below. |
 | `attribution.mode` | Selects the aggregate traffic key: `interface` or `vlan`. |
 | `attribution.interfaces` / `attribution.vlans` | Optional exporter-scoped names for interface indexes or VLAN IDs. Unmapped entries use `exporter:ifIndex` or `VLAN <id>`. |
-| `sampling.upstream_capacity_pools` | Optional shared upstream bandwidth pools shown in Overview. Each pool has a name, `ingress_mbps`, `egress_mbps`, and one or more `{exporter, ifindex}` members. The console sums members and shows current traffic, capacity, and utilization separately for ingress and egress. Every member must be a labelled external interface and may belong to only one pool. |
+| `open_peering.members[]` | Optional OpenPeering members. In `interface` mode use `{exporter, ifindex}`; in `vlan` mode use `{exporter, vlan}`. Members must also exist in the matching attribution list. Attack samples can show the member's MAC/IP distribution. |
+| `sampling.upstream_capacity_pools` | Optional shared upstream bandwidth pools shown in Overview. Each pool has a name, `ingress_mbps`, `egress_mbps`, and one or more `{exporter, ifindex}` or `{exporter, vlan}` members. The console sums members and shows current traffic, capacity, and utilization separately for ingress and egress. Every member must be a labelled external boundary and may belong to only one pool. |
 | `sampling.boundary_debug` | When `true`, exports `kapkan_engine_boundary_debug_bytes_total` (bytes per exporter and interface) to help identify external interfaces. Not cardinality-bounded — enable briefly, then disable. |
 | `flow_sources` | Optional allowlist of trusted exporter source addresses. Telemetry arrives over unauthenticated UDP, so when set only listed sources are labeled by exporter on metrics (everything else is bucketed under `other`), bounding metric label cardinality. Empty applies an automatic cap instead. Does not affect detection. |
+| `mac_ip_mapping` | Optional live IPv4 MAC-to-IP lookup from SNMP v2c routers. It performs a full walk of `oid` immediately and every `poll_interval_seconds` (default `60`); `timeout_seconds` and `retries` control each walk. Each router uses `community_env` so the community stays out of YAML. Results are kept in memory and annotate OpenPeering MACs and attack samples; the ifIndex in the OID is decoded but not displayed. A failed walk retains the last successful router snapshot. |
 | `networks` | Protected [prefixes](/docs/glossary) (IP ranges in CIDR form, e.g. `203.0.113.0/24`). Detection applies **only** to destinations inside these, and they must not overlap. |
 | `protected_whitelist` | Addresses that are **never** banned, regardless of traffic. See [Safety model](/docs/safety). |
 | `thresholds.pps` / `.mbps` / `.flows_per_sec` | Per-destination thresholds after sampling correction. All must be `> 0`. See [Detection](/docs/detection). |

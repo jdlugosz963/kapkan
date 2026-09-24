@@ -20,6 +20,24 @@ way there is nothing to compile; [Building from source](#building-from-source) i
 want to.
 </Callout>
 
+## Current production flow profile
+
+The current production deployment receives NetFlow v9 from the S6750 exporter at
+`172.16.7.11` on UDP `2055`. The switch samples at `1:1024`, so production uses
+`sampling.default_rate: 1024`, `attribution.mode: vlan`, and VLAN labels for the configured
+upstreams. The `sampling.boundary` block excludes internal VLANs before traffic is counted.
+
+OpenPeering members are configured by VLAN and attack samples include the distribution by
+`MAC (IP)` for the matching OpenPeering member. The optional `mac_ip_mapping` collector reads
+the IPv4 ARP table from the NE8000 (`172.16.7.100`) and ASR9901 (`172.16.7.110`) over SNMP v2c
+every 60 seconds. Communities are read from `KAPKAN_SNMP_COMMUNITY` in `/etc/kapkan/kapkan.env`,
+never from YAML. The lookup identifies the router-observed node/operator; it does not by itself
+identify the participant behind that node.
+
+Production has both `thresholds` for incoming attacks and `thresholds_outgoing` for attacks
+originated by protected hosts. The latter reports `direction: outgoing`; it does not change the
+incoming thresholds.
+
 ## Install
 
 ### Install the package
