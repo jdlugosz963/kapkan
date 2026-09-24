@@ -382,6 +382,13 @@ func TestPayloadMatchesPublishedSchema(t *testing.T) {
 		Protocols:    []engine.Counter{{Key: "udp", Packets: 1, Bytes: 468}},
 		TopASNs:      []engine.Counter{{Key: "AS64500 Evil Corp", Packets: 1, Bytes: 468}},
 		TopUpstreams: []engine.Counter{{Key: "Netia", Packets: 1, Bytes: 468}},
+		OpenPeering: []engine.AttackOpenPeeringMember{{
+			Member: "EPIX", Packets: 1000, Bytes: 468000,
+			UnknownPackets: 1, UnknownBytes: 468, OtherPackets: 2, OtherBytes: 936,
+			MACs: []engine.AttackOpenPeeringMAC{{
+				MAC: "00:59:dc:16:5c:e9", IPs: []string{"89.46.145.185"}, Packets: 997, Bytes: 466596,
+			}},
+		}},
 	}
 	ev.Classification = &engine.Classification{Type: engine.AttackNTPAmplification, Confidence: 0.9, SrcPort: 123}
 	n := New(storeFrom(t, yamlWith("")), discardLogger())
@@ -451,6 +458,13 @@ func TestPayloadMatchesPublishedSchema(t *testing.T) {
 	// Counters ($defs shared by the four top-K lists).
 	gotCounter := gotSample["top_sources"].([]any)[0].(map[string]any)
 	keysMatch(t, "counters", gotCounter, schemaNode(t, schema, "$defs", "counters", "items", "properties"))
+
+	gotOpenPeering := gotSample["open_peering"].([]any)[0].(map[string]any)
+	keysMatch(t, "sample.open_peering[]", gotOpenPeering,
+		schemaNode(t, schema, "properties", "sample", "properties", "open_peering", "items", "properties"))
+	gotPeerMAC := gotOpenPeering["macs"].([]any)[0].(map[string]any)
+	keysMatch(t, "sample.open_peering[].macs[]", gotPeerMAC,
+		schemaNode(t, schema, "properties", "sample", "properties", "open_peering", "items", "properties", "macs", "items", "properties"))
 
 	// The method enum must cover every mitigation method the config can resolve.
 	//

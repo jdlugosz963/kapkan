@@ -144,6 +144,8 @@ activeAttacks: { one: "# активная атака", few: "# активные 
       "ac.topasns": "Топ AS",
       "ac.ingressupstreams": "Входящие апстримы",
       "ac.egressupstreams": "Исходящие апстримы",
+      "ac.othermacs": "Другие MAC-адреса",
+      "ac.unknownmac": "Неизвестный MAC",
       "ac.topdestasns": "Топ AS назначения",
       "ac.topsrcports": "Топ исходящих портов",
       "ac.topdstports": "Топ портов назначения",

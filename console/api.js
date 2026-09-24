@@ -144,12 +144,30 @@
         src_vlan: f.src_vlan || 0, dst_vlan: f.dst_vlan || 0
       };
     });
+    var openPeering = (s.open_peering || []).map(function (member) {
+      return {
+        member: member.member,
+        packets: member.packets || 0,
+        bytes: member.bytes || 0,
+        unknown_packets: member.unknown_packets || 0,
+        unknown_bytes: member.unknown_bytes || 0,
+        other_packets: member.other_packets || 0,
+        other_bytes: member.other_bytes || 0,
+        macs: (member.macs || []).map(function (peer) {
+          return {
+            mac: peer.mac, ips: peer.ips || [],
+            packets: peer.packets || 0, bytes: peer.bytes || 0
+          };
+        })
+      };
+    });
     return {
       flows: flows,
       top_sources: s.top_sources || [], top_src_ports: s.top_src_ports || [],
       top_dst_ports: s.top_dst_ports || [], protocols: s.protocols || [],
       top_asns: s.top_asns || [],
       top_upstreams: s.top_upstreams || [],
+      open_peering: openPeering,
       total_packets: s.total_packets || 0
     };
   }

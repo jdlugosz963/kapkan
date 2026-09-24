@@ -2,6 +2,7 @@ package engine
 
 import (
 	"net/netip"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -142,6 +143,95 @@ func TestAttackSampleUpstreamAggregation(t *testing.T) {
 	}
 	if got := ev.Sample.Flows[0]; got.Exporter != exporter.String() || got.InIfIndex == 0 {
 		t.Errorf("sample flow interface metadata = %+v", got)
+	}
+}
+
+func TestAttackSampleOpenPeeringDistribution(t *testing.T) {
+	yaml := strings.Replace(baseYAML, "networks:", `attribution:
+  mode: vlan
+  vlans:
+    - {exporter: "198.51.100.9", vlan: 992, name: "EPIX"}
+open_peering:
+  members:
+    - {exporter: "198.51.100.9", vlan: 992}
+networks:`, 1)
+	cfg, err := config.Parse([]byte(yaml))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	clk := newMockClock()
+	resolver := fakeMACIPResolver{"00:59:dc:16:5c:e9": {"89.46.145.185"}}
+	e := New(config.NewStore("", cfg), WithClock(clk.Now), WithWindow(1), WithMACIPResolver(resolver))
+	events := drain(e)
+	exporter := netip.MustParseAddr("198.51.100.9")
+	peer := [6]byte{0x00, 0x59, 0xdc, 0x16, 0x5c, 0xe9}
+
+	attack := attackerFlow("198.51.100.7", "203.0.113.20", 123, 1000)
+	attack.Exporter, attack.SrcVLAN, attack.SrcMAC, attack.Packets = exporter, 992, peer, 100
+	e.Process(attack)
+	// Same OpenPeering member and MAC, but a different protected target: it
+	// must not leak into this attack's frozen distribution.
+	other := attack
+	other.DstAddr = netip.MustParseAddr("203.0.113.21")
+	other.Packets = 900
+	e.Process(other)
+	runTick(e, clk)
+
+	var ev Event
+	deadline := time.After(time.Second)
+	for ev.Target.String() != "203.0.113.20" {
+		select {
+		case ev = <-events:
+		case <-deadline:
+			t.Fatal("no AttackStarted for target")
+		}
+	}
+	if ev.Sample == nil {
+		t.Fatalf("event = %+v, want target sample", ev)
+	}
+	if len(ev.Sample.OpenPeering) != 1 {
+		t.Fatalf("OpenPeering = %+v, want one member", ev.Sample.OpenPeering)
+	}
+	member := ev.Sample.OpenPeering[0]
+	if member.Member != "EPIX" || member.Packets != 100000 || len(member.MACs) != 1 {
+		t.Fatalf("member = %+v, want isolated EPIX distribution", member)
+	}
+	if got := member.MACs[0]; got.MAC != "00:59:dc:16:5c:e9" || !reflect.DeepEqual(got.IPs, []string{"89.46.145.185"}) {
+		t.Fatalf("MAC = %+v, want enriched peer", got)
+	}
+}
+
+func TestOutgoingOpenPeeringDistributionUsesDestinationMAC(t *testing.T) {
+	yaml := strings.Replace(baseYAML, "networks:", `attribution:
+  mode: vlan
+  vlans:
+    - {exporter: "198.51.100.9", vlan: 992, name: "EPIX"}
+open_peering:
+  members:
+    - {exporter: "198.51.100.9", vlan: 992}
+networks:`, 1)
+	cfg, err := config.Parse([]byte(yaml))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	dstMAC := [6]byte{0x84, 0x5c, 0x31, 0xbd, 0x8f, 0x70}
+	agg := newSampleAggregator(1, nil, fakeMACIPResolver{
+		"84:5c:31:bd:8f:70": {"89.46.146.85"},
+	}, cfg)
+	agg.add(&flow.Flow{
+		SrcAddr: netip.MustParseAddr("203.0.113.20"), DstAddr: netip.MustParseAddr("198.51.100.7"),
+		Exporter: netip.MustParseAddr("198.51.100.9"), SrcVLAN: 992,
+		SrcMAC: [6]byte{0x00, 0x11, 0x22, 0x33, 0x44, 0x55}, DstMAC: dstMAC,
+		Packets: 10, Bytes: 1000, SamplingRate: 100,
+	}, dirOut, true)
+
+	sample := agg.sample()
+	if sample == nil || len(sample.OpenPeering) != 1 || len(sample.OpenPeering[0].MACs) != 1 {
+		t.Fatalf("sample = %+v, want one outgoing OpenPeering peer", sample)
+	}
+	peer := sample.OpenPeering[0].MACs[0]
+	if peer.MAC != "84:5c:31:bd:8f:70" || !reflect.DeepEqual(peer.IPs, []string{"89.46.146.85"}) {
+		t.Fatalf("peer = %+v, want destination MAC/IP", peer)
 	}
 }
 

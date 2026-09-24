@@ -32,6 +32,15 @@
     // ranks the remote *destinations* (the victims) under top_sources/top_asns.
     // Relabel accordingly so the panel doesn't call destinations "sources".
     var isOut = a.direction === "outgoing";
+    var openPeering = (sample && sample.open_peering ? sample.open_peering : []).map(function (member) {
+      var rows = (member.macs || []).map(function (peer) {
+        var label = peer.mac + (peer.ips.length ? " (" + peer.ips.join(", ") + ")" : "");
+        return { key: label, packets: peer.packets, bytes: peer.bytes };
+      });
+      if (member.other_packets) rows.push({ key: I.t("ac.othermacs"), packets: member.other_packets, bytes: member.other_bytes });
+      if (member.unknown_packets) rows.push({ key: I.t("ac.unknownmac"), packets: member.unknown_packets, bytes: member.unknown_bytes });
+      return K.shareGroup(member.member, rows, { src: true, total: member.packets, limit: rows.length });
+    });
     var body = h("div", { class: "drawer__body" }, [
       actions.length ? h("div", { class: "row", style: { justifyContent: "flex-end" } }, actions) : null,
 
@@ -63,6 +72,7 @@
       sample ? section("ac.sample", "target", h("div", {}, [
         h("div", { class: "shares" }, [
           (sample.top_upstreams && sample.top_upstreams.length) ? K.shareGroup(I.t(isOut ? "ac.egressupstreams" : "ac.ingressupstreams"), sample.top_upstreams, { src: true, total: sample.total_packets, limit: 16 }) : null,
+          openPeering,
           K.shareGroup(I.t(isOut ? "ac.topdest" : "ac.topsources"), sample.top_sources, { src: true }),
           (sample.top_asns && sample.top_asns.length) ? K.shareGroup(I.t(isOut ? "ac.topdestasns" : "ac.topasns"), sample.top_asns, { src: true }) : null,
           K.shareGroup(I.t("ac.protocols"), sample.protocols, {}),

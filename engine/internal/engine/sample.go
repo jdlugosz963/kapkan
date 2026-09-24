@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"net"
 	"net/netip"
 	"sort"
 	"strconv"
@@ -15,6 +16,9 @@ const (
 	topK = 5
 	// upstreamTopK covers typical multi-transit edges without bloating events.
 	upstreamTopK = 16
+	// openPeeringMACTopK bounds persisted attack samples while retaining the
+	// dominant peers. OtherPackets/OtherBytes preserve the truncated share.
+	openPeeringMACTopK = 20
 )
 
 // sampleEntry is one slot of a shard's recent-flows ring.
@@ -59,6 +63,28 @@ type Counter struct {
 	Bytes   uint64 `json:"bytes"`
 }
 
+// AttackOpenPeeringMAC is one peer's contribution to an attack through an
+// OpenPeering member. Packets and Bytes are sampling-corrected.
+type AttackOpenPeeringMAC struct {
+	MAC     string   `json:"mac"`
+	IPs     []string `json:"ips,omitempty"`
+	Packets uint64   `json:"packets"`
+	Bytes   uint64   `json:"bytes"`
+}
+
+// AttackOpenPeeringMember is the MAC distribution of attack traffic carried
+// by one configured OpenPeering member.
+type AttackOpenPeeringMember struct {
+	Member         string                 `json:"member"`
+	Packets        uint64                 `json:"packets"`
+	Bytes          uint64                 `json:"bytes"`
+	UnknownPackets uint64                 `json:"unknown_packets,omitempty"`
+	UnknownBytes   uint64                 `json:"unknown_bytes,omitempty"`
+	OtherPackets   uint64                 `json:"other_packets,omitempty"`
+	OtherBytes     uint64                 `json:"other_bytes,omitempty"`
+	MACs           []AttackOpenPeeringMAC `json:"macs"`
+}
+
 // AttackSample summarizes the buffered flows behind a detection at the
 // moment the threshold tripped: dominant sources, ports and protocols, plus
 // up to flows_per_attack raw records. Host samples list raw flows newest
@@ -79,6 +105,9 @@ type AttackSample struct {
 	// TopUpstreams ranks the boundary interfaces carrying the attack. Keys are
 	// configured operator labels, or exporter:ifIndex when no label is set.
 	TopUpstreams []Counter `json:"top_upstreams,omitempty"`
+	// OpenPeering nests the peer MAC/IP distribution under each configured
+	// OpenPeering member that carried part of this attack.
+	OpenPeering []AttackOpenPeeringMember `json:"open_peering,omitempty"`
 	// TotalPackets is the untruncated sampling-corrected packet total of
 	// every matched flow — the denominator for shares, since the top-K
 	// lists above drop lighter keys.
@@ -115,24 +144,34 @@ type sampleAggregator struct {
 	protocols    map[string]*Counter
 	asns         map[string]*Counter
 	upstreams    map[string]*Counter
+	openPeering  map[string]*attackOpenPeeringCounter
 	totalPackets uint64
 
 	geo      geoip.Resolver
 	asn      bool // an ASN database is available: aggregate per-ASN
 	memo     map[netip.Addr]geoip.Info
 	boundary *config.Config
+	macIP    MACIPResolver
 }
 
-func newSampleAggregator(maxFlows int, geo geoip.Resolver, cfg *config.Config) *sampleAggregator {
+type attackOpenPeeringCounter struct {
+	packets, bytes               uint64
+	unknownPackets, unknownBytes uint64
+	macs                         map[string]*Counter
+}
+
+func newSampleAggregator(maxFlows int, geo geoip.Resolver, macIP MACIPResolver, cfg *config.Config) *sampleAggregator {
 	a := &sampleAggregator{
-		maxFlows:  maxFlows,
-		sources:   make(map[string]*Counter),
-		srcPorts:  make(map[string]*Counter),
-		dstPorts:  make(map[string]*Counter),
-		protocols: make(map[string]*Counter),
-		upstreams: make(map[string]*Counter),
-		geo:       geo,
-		boundary:  cfg,
+		maxFlows:    maxFlows,
+		sources:     make(map[string]*Counter),
+		srcPorts:    make(map[string]*Counter),
+		dstPorts:    make(map[string]*Counter),
+		protocols:   make(map[string]*Counter),
+		upstreams:   make(map[string]*Counter),
+		openPeering: make(map[string]*attackOpenPeeringCounter),
+		geo:         geo,
+		boundary:    cfg,
+		macIP:       macIP,
 	}
 	if geo != nil {
 		a.memo = make(map[netip.Addr]geoip.Info)
@@ -223,6 +262,25 @@ func (a *sampleAggregator) add(f *flow.Flow, dir int8, capture bool) {
 	if a.boundary.Attribution.Mode != "vlan" || vlan != 0 {
 		bump(a.upstreams, upstreamKey(a.boundary, f.Exporter, iface, vlan), packets, bytes)
 	}
+	if member, ok := a.boundary.OpenPeeringMember(f.Exporter, iface, vlan); ok {
+		counter := a.openPeering[member]
+		if counter == nil {
+			counter = &attackOpenPeeringCounter{macs: make(map[string]*Counter)}
+			a.openPeering[member] = counter
+		}
+		counter.packets += packets
+		counter.bytes += bytes
+		mac := f.SrcMAC
+		if dir == dirOut {
+			mac = f.DstMAC
+		}
+		if !usablePeerMAC(mac) {
+			counter.unknownPackets += packets
+			counter.unknownBytes += bytes
+		} else {
+			bump(counter.macs, net.HardwareAddr(mac[:]).String(), packets, bytes)
+		}
+	}
 	// Attribute the attribution endpoint (the same "source" as TopSources:
 	// the remote attacker for incoming, the victim for outgoing) to its ASN.
 	if a.asn {
@@ -289,12 +347,49 @@ func (a *sampleAggregator) sample() *AttackSample {
 		TopDstPorts:  top(a.dstPorts, topK),
 		Protocols:    top(a.protocols, topK),
 		TopUpstreams: top(a.upstreams, upstreamTopK),
+		OpenPeering:  a.openPeeringSample(),
 		TotalPackets: a.totalPackets,
 	}
 	if a.asn {
 		s.TopASNs = top(a.asns, topK)
 	}
 	return s
+}
+
+func (a *sampleAggregator) openPeeringSample() []AttackOpenPeeringMember {
+	members := make([]AttackOpenPeeringMember, 0, len(a.openPeering))
+	for name, counter := range a.openPeering {
+		allMACs := top(counter.macs, len(counter.macs))
+		limit := len(allMACs)
+		if limit > openPeeringMACTopK {
+			limit = openPeeringMACTopK
+		}
+		member := AttackOpenPeeringMember{
+			Member: name, Packets: counter.packets, Bytes: counter.bytes,
+			UnknownPackets: counter.unknownPackets, UnknownBytes: counter.unknownBytes,
+			MACs: make([]AttackOpenPeeringMAC, 0, limit),
+		}
+		for i, mac := range allMACs {
+			if i >= limit {
+				member.OtherPackets += mac.Packets
+				member.OtherBytes += mac.Bytes
+				continue
+			}
+			row := AttackOpenPeeringMAC{MAC: mac.Key, Packets: mac.Packets, Bytes: mac.Bytes}
+			if a.macIP != nil {
+				row.IPs = a.macIP.Lookup(mac.Key)
+			}
+			member.MACs = append(member.MACs, row)
+		}
+		members = append(members, member)
+	}
+	sort.Slice(members, func(i, j int) bool {
+		if members[i].Packets != members[j].Packets {
+			return members[i].Packets > members[j].Packets
+		}
+		return members[i].Member < members[j].Member
+	})
+	return members
 }
 
 // scanRing walks one shard's ring newest-first, calling visit for every
@@ -334,7 +429,7 @@ func (e *Engine) collectHostSample(sh *shard, target netip.Addr, dir int, sinceE
 	if len(sh.ring) == 0 {
 		return nil
 	}
-	agg := newSampleAggregator(e.sampleFlows, e.geo, e.store.Get())
+	agg := newSampleAggregator(e.sampleFlows, e.geo, e.macIP, e.store.Get())
 	d := int8(dir)
 	scanRing(sh, sinceEpoch, func(se *sampleEntry) {
 		if se.dir != d {
@@ -423,7 +518,7 @@ func (e *Engine) collectByMatch(sinceEpoch int64, match func(*sampleEntry) bool)
 
 	quotas := groupQuotas(counts[:], total, e.sampleFlows)
 
-	agg := newSampleAggregator(e.sampleFlows, e.geo, e.store.Get())
+	agg := newSampleAggregator(e.sampleFlows, e.geo, e.macIP, e.store.Get())
 	for i, sh := range e.shards {
 		if counts[i] == 0 {
 			continue

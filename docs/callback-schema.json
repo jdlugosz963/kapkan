@@ -128,6 +128,34 @@
           "$ref": "#/$defs/counters",
           "description": "Dominant boundary upstream labels by sampling-corrected packets. Unlabelled interfaces use exporter:ifIndex."
         },
+        "open_peering": {
+          "type": "array",
+          "description": "Per-attack peer MAC/IP distribution nested by configured OpenPeering member. Totals are sampling-corrected and cover only matched flows for this attack and direction.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "member": { "type": "string" },
+              "packets": { "type": "integer" },
+              "bytes": { "type": "integer" },
+              "unknown_packets": { "type": "integer", "description": "Traffic without a usable unicast peer MAC." },
+              "unknown_bytes": { "type": "integer" },
+              "other_packets": { "type": "integer", "description": "Traffic outside the persisted top-MAC limit." },
+              "other_bytes": { "type": "integer" },
+              "macs": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "mac": { "type": "string" },
+                    "ips": { "type": "array", "items": { "type": "string" } },
+                    "packets": { "type": "integer" },
+                    "bytes": { "type": "integer" }
+                  }
+                }
+              }
+            }
+          }
+        },
         "total_packets": {
           "type": "integer",
           "description": "Untruncated sampling-corrected packet total of all matched flows; denominator for shares (the top-K lists drop lighter keys)."
